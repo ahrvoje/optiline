@@ -1,0 +1,7 @@
+wasi-sdk-version: 33.0
+clang-version: 22.1.0
+target: x86_64-windows
+required-path: C:\repos\optiline\tools\wasi-sdk-33.0-x86_64-windows
+archive: wasi-sdk-33.0-x86_64-windows.tar.gz
+archive-sha256: df14ca2a2127c2d6b6be07e6f5549b3af9c1b3c0112430c200a4749970c59f06
+release-url: https://github.com/WebAssembly/wasi-sdk/releases/tag/wasi-sdk-33

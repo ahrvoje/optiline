@@ -1,0 +1,64 @@
+/* Full-window interactive profile viewer and saved-profile actions. */
+.shell {
+  grid-template-rows: 62px minmax(330px, 1fr) 300px;
+}
+
+.sidebar {
+  grid-row: 2;
+}
+
+.workspace {
+  grid-column: 2;
+  grid-row: 2;
+  grid-template-rows: minmax(330px, 1fr);
+}
+
+.control-panel {
+  grid-row: 1;
+}
+
+.chart-panel {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+
+.chart-controls {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.chart-panel canvas {
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+}
+
+.saved-item {
+  grid-template-columns: 20px 1fr auto auto;
+}
+
+.delete-profile {
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #7f8a95;
+  cursor: pointer;
+}
+
+.delete-profile:hover {
+  color: #ff8f8f;
+  border-color: #63383a;
+  background: #2a1d1f;
+}
+
+.delete-profile svg {
+  width: 13px;
+  height: 13px;
+  pointer-events: none;
+}

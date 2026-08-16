@@ -1,0 +1,34 @@
+{
+  // Type-checks everything the root tsconfig.json does not include:
+  // Playwright specs, the WGSL conformance harness, and the two test
+  // runner configs. The root config covers src/ and tests/unit only.
+  //
+  //   npx tsc -p tests/tsconfig.e2e.json
+  //
+  // Kept option-identical to the root tsconfig where it matters
+  // (strictness, target, module resolution). TypeScript 7 requires
+  // "paths" values to be relative and forbids "baseUrl"; no path
+  // aliases are needed here because e2e specs never import from src/.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["@webgpu/types"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "exactOptionalPropertyTypes": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "./e2e/**/*.ts",
+    "./conformance/**/*.ts",
+    "./types/**/*.d.ts",
+    "../playwright.config.ts",
+    "../vitest.config.ts"
+  ]
+}

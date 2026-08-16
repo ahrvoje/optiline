@@ -1,0 +1,7 @@
+node_modules/
+dist/
+build/
+tools/wasi-sdk-33.0-x86_64-windows/
+test-results/
+playwright-report/
+*.map.txt
