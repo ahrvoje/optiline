@@ -9,13 +9,17 @@
 }
 
 .work-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  display: grid;
-  place-items: center;
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  min-width: 160px;
+  margin-left: 12px;
+  overflow: hidden;
   pointer-events: none;
-  background: radial-gradient(circle at center, #101317b8 0, #10131766 22%, transparent 52%);
+  border-left: 2px solid #ff9a42;
+  background: #11151acc;
 }
 
 .work-overlay[hidden] {
@@ -23,12 +27,9 @@
 }
 
 .work-overlay span {
-  padding: 16px 24px;
-  border: 1px solid #ff9a4266;
-  background: #11151ad9;
+  padding: 0 18px;
   color: #ff9a42;
-  box-shadow: 0 10px 35px #0009;
-  font-size: clamp(26px, 3.2vw, 48px);
+  font-size: 18px;
   font-weight: 800;
   letter-spacing: .18em;
   line-height: 1;
@@ -36,8 +37,39 @@
 }
 
 .work-overlay.validating span {
-  border-color: #6ed9eb66;
   color: #6ed9eb;
+}
+
+.work-overlay.validating {
+  border-left-color: #6ed9eb;
+}
+
+.validation-progress {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 5px;
+  overflow: hidden;
+  background: #27333b;
+}
+
+.work-overlay:not(.validating) .validation-progress {
+  display: none;
+}
+
+.validation-progress i {
+  display: block;
+  width: 32%;
+  height: 100%;
+  background: #6ed9eb;
+  box-shadow: 0 0 10px #6ed9ebaa;
+  animation: validation-sweep 1.1s linear infinite;
+}
+
+@keyframes validation-sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(313%); }
 }
 
 .input-wrap .run-mode {
@@ -49,4 +81,257 @@
   background: #101419;
   color: #f0f2f4;
   font: 11px ui-monospace, monospace;
+}
+
+.catalog-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.catalog-actions button {
+  border: 1px solid #343c45;
+  border-radius: 3px;
+  background: #20262d;
+  color: #b9c2cc;
+  padding: 3px 5px;
+  font-size: 8px;
+  letter-spacing: .08em;
+  cursor: pointer;
+}
+
+.catalog-actions button:hover {
+  color: #ffad66;
+  border-color: #75451e;
+}
+
+.track-row {
+  position: relative;
+  display: flex;
+}
+
+.track-row .track-card {
+  padding-right: 61px;
+}
+
+.track-actions {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  display: flex;
+  gap: 2px;
+  transform: translateY(-50%);
+}
+
+.track-action {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: #171c22;
+  color: #77828e;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.track-action:hover {
+  color: #ffad66;
+  border-color: #68451f;
+}
+
+.track-action.delete:hover {
+  color: #ff7777;
+  border-color: #63383a;
+}
+
+.viewer-panel canvas.editing {
+  cursor: grab;
+}
+
+.viewer-panel canvas.editing:active {
+  cursor: grabbing;
+}
+
+.track-editor {
+  position: absolute;
+  z-index: 3;
+  top: 58px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transform: translateX(-50%);
+  padding: 7px 8px;
+  border: 1px solid #68451f;
+  border-radius: 4px;
+  background: #11161be8;
+  box-shadow: 0 5px 20px #0007;
+}
+
+.track-editor[hidden] {
+  display: none;
+}
+
+.track-editor label,
+.track-editor span {
+  color: #9ca6b1;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  white-space: nowrap;
+}
+
+.track-editor input {
+  width: 140px;
+  height: 27px;
+  border: 1px solid #343c45;
+  border-radius: 3px;
+  outline: 0;
+  background: #0e1216;
+  color: #edf1f5;
+  padding: 0 7px;
+  font: 11px ui-monospace, monospace;
+}
+
+.track-editor button {
+  height: 27px;
+  border: 1px solid #68451f;
+  border-radius: 3px;
+  background: #322213;
+  color: #ffad66;
+  font-size: 9px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.settings-grid {
+  display: block;
+  margin-top: 13px;
+}
+
+.setting {
+  display: grid;
+  grid-template-columns: minmax(125px, .45fr) minmax(190px, .95fr) minmax(48px, .75fr);
+  gap: 8px;
+  padding: 10px 9px 10px 10px;
+  border-bottom: 1px solid #242a30;
+  border-left: 6px solid var(--constraint-color, #303740);
+}
+
+.setting-editor label {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: #aeb7c1;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: .03em;
+}
+
+.setting-editor .input-wrap {
+  max-width: 158px;
+}
+
+.setting-editor .input-wrap > span {
+  color: #f5f7fa;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.setting-equation {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-self: start;
+  min-width: 0;
+  padding-top: 23px;
+}
+
+.setting-equation .formula {
+  color: #f5f7fa;
+  font: italic 16px Georgia, "Times New Roman", serif;
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+
+.setting-description {
+  align-self: center;
+  margin: 0;
+  color: #f1f4f7;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.metrics {
+  gap: 18px;
+}
+
+.viewer-footer {
+  right: 18px;
+  display: flex;
+  align-items: stretch;
+}
+
+.viewer-footer .metrics {
+  flex: 0 0 auto;
+}
+
+.chart-panel {
+  padding: 4px 16px 8px;
+}
+
+.chart-head {
+  height: 28px;
+  align-items: center;
+  gap: 12px;
+}
+
+.chart-labels {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.chart-axis-labels {
+  display: grid;
+  flex: 0 0 360px;
+  grid-template-columns: repeat(5, 72px);
+}
+
+.chart-axis-label {
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.chart-series-labels {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-left: 12px;
+}
+
+.chart-series-label {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chart-controls {
+  flex: 0 0 auto;
+}
+
+.chart-panel canvas {
+  height: calc(100% - 28px);
+}
+
+@media (max-width: 1150px) {
+  .setting {
+    grid-template-columns: 1fr;
+  }
 }

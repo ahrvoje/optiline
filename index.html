@@ -6,10 +6,10 @@
     <header class="topbar">
       <div class="brand"><span class="brand-mark">OP</span><div><strong>OPTILINE</strong><small>PH RACING LAB</small></div></div>
       <div class="run-status"><span id="engine-dot" class="status-dot"></span><span id="engine-status">Preparing PH catalog</span></div>
-      <div class="top-actions"><button id="play-button" class="button ghost" disabled>▶ PLAY</button><button id="zoom-button" class="button toggle" aria-pressed="false">ZOOMED</button><button id="save-button" class="button ghost" disabled>SAVE</button></div>
+      <div class="top-actions"><button id="play-button" class="button ghost">▶ PLAY</button><button id="zoom-button" class="button toggle" aria-pressed="false">ZOOMED</button><button id="save-button" class="button ghost" disabled>SAVE</button></div>
     </header>
     <aside class="sidebar">
-      <div class="panel-title"><span>TRACK CATALOG</span><span id="track-count" class="count"></span></div>
+      <div class="panel-title"><span>TRACK CATALOG</span><span class="catalog-actions"><button id="new-track-button" type="button">+ OVAL</button><span id="track-count" class="count"></span></span></div>
       <div id="track-list" class="track-list" role="listbox" aria-label="Racing tracks"></div>
       <div class="saved-header"><span>SAVED PROFILES</span><span id="saved-count" class="count">0</span></div>
       <div id="saved-list" class="saved-list"><p class="empty">No saved profiles on this track.</p></div>
@@ -17,18 +17,24 @@
     <main class="workspace">
       <section class="viewer-panel">
         <canvas id="track-canvas" aria-label="Track layout and racing lines"></canvas>
-        <div id="work-overlay" class="work-overlay" role="status" aria-live="polite" hidden><span>OPTIMIZING</span></div>
+        <div id="track-editor" class="track-editor" hidden><label for="track-editor-name">CUSTOM TRACK</label><input id="track-editor-name" maxlength="80"><span>DRAG ORANGE NODES</span><button id="track-editor-done" type="button">DONE</button></div>
         <div class="viewer-overlay top-left"><span id="track-name">—</span><small id="track-meta">—</small></div>
         <div class="viewer-overlay top-right"><label for="focus-select">FOCUS</label><select id="focus-select"><option value="current">Current line</option></select></div>
-        <div class="viewer-overlay bottom-left metrics"><div><b id="lap-time">—</b><small>LAP TIME</small></div><div><b id="line-length">—</b><small>LINE LENGTH</small></div><div><b id="candidate-rate">—</b><small>CANDIDATES/S</small></div></div>
+        <div class="viewer-overlay bottom-left viewer-footer">
+          <div class="metrics"><div><b id="lap-time">—</b><small>LAP TIME</small></div><div><b id="line-length">—</b><small>LINE LENGTH</small></div><div><b id="station-rate">—</b><small>STATIONS/S</small></div><div><b id="candidate-rate">—</b><small>PROXIES/S</small></div><div><b id="full-rate">—</b><small>FULL LAPS/S</small></div><div><b id="certified-rate">—</b><small>CERTIFIED/S</small></div><div><b id="optimization-time">—</b><small>OPT TIME</small></div></div>
+          <div id="work-overlay" class="work-overlay" role="status" aria-live="polite" hidden>
+            <span>OPTIMIZING</span>
+            <div class="validation-progress" role="progressbar" aria-label="Validation in progress"><i></i></div>
+          </div>
+        </div>
       </section>
       <section class="control-panel">
-        <div class="control-head"><div><h1>Optimization setup</h1><p>All values are physical SI inputs. Lap time is the only rank value.</p></div><div class="run-buttons"><button id="reset-button" class="button reset">RESET</button><button id="optimize-button" class="button optimize">OPTIMIZE</button></div></div>
+        <div class="control-head"><div><h1>Optimization setup</h1><p>Hard feasibility ranks first; lap time is the primary feasible objective.</p></div><div class="run-buttons"><button id="reset-button" class="button reset">RESET</button><button id="optimize-button" class="button optimize">OPTIMIZE</button></div></div>
         <div id="settings-grid" class="settings-grid"></div>
-        <div class="optimizer-note"><strong>177-coordinate multiscale PH GPU + periodic dynamics + exact polish</strong><span>Seeded local, medium, broad, and coefficient-smoothing PH moves use analytic closure, length, tangent, normal, and curvature on the GPU. Stagnant basins restart without discarding the global best. Binary64 C99 polishing repairs certified curvature hotspots in the gate-preserving PH nullspace, then proves swept-rectangle containment. Inverse arc length is playback-only.</span></div>
+        <div class="optimizer-note"><strong>V2 Fourier backbone + high-pass quintic residual</strong><span>A tanh decoder preserves the robust rectangle corridor. Spectral continuation discovers global features, exact knot insertion adds local resolution, and closure-projected intrinsic curvature refinement finishes the line. A periodic implicit-midpoint speed solve reranks GPU proxy elites before binary64 containment certification.</span></div>
       </section>
     </main>
-    <section class="chart-panel"><div class="chart-head"><div><h2>Racing line profile</h2><p>Click or drag across the plot to drive the vehicle · each colored series has its own Y axis</p></div><div class="chart-controls"><div class="playback-speed"><label for="profile-axis-select">X AXIS</label><select id="profile-axis-select"><option value="time">Lap time</option><option value="distance">Track centerline distance</option></select></div><div class="playback-speed"><label for="speed-select">PLAYBACK</label><select id="speed-select"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></div></div></div><canvas id="profile-canvas" aria-label="Speed acceleration stability and curvature profile"></canvas></section>
+    <section class="chart-panel"><div class="chart-head"><div id="profile-labels" class="chart-labels" aria-label="Profile series"></div><div class="chart-controls"><div class="playback-speed"><label for="profile-axis-select">X AXIS</label><select id="profile-axis-select"><option value="time">Lap time</option><option value="distance">Track centerline distance</option></select></div><div class="playback-speed"><label for="speed-select">PLAYBACK</label><select id="speed-select"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></div></div></div><canvas id="profile-canvas" aria-label="Speed acceleration stability and curvature profile"></canvas></section>
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script type="module" src="/src/main.ts"></script>

@@ -16,8 +16,14 @@ op_aero op_dynamics_aero(const op_vehicle *veh);
 double op_dynamics_utilization(const op_vehicle *veh, const op_aero *aero,
                                double q, double a_t, double kappa);
 
-/* Constant-speed cap q_steady(K) and node cap (§11.4). */
+/* Pure-lateral pointwise squared-speed cap (new specification §9.7). */
 double op_dynamics_q_cap(const op_vehicle *veh, const op_aero *aero, double K);
+
+/* Pointwise net tangential bounds at q=v^2 (new specification §9.6). */
+double op_dynamics_net_accel(const op_vehicle *veh, const op_aero *aero,
+                             double q, double kappa);
+double op_dynamics_net_brake(const op_vehicle *veh, const op_aero *aero,
+                             double q, double kappa);
 
 /* Conservative remaining longitudinal capacity G+/G- over q in [ql,qh]
  * (§11.5). Returns OP_DYNAMIC_PROFILE_FAILED if the lateral fraction
@@ -26,7 +32,7 @@ op_result op_dynamics_capacity(const op_vehicle *veh, const op_aero *aero,
                                double ql, double qh, double K,
                                double *g_plus, double *g_minus);
 
-/* Reach maps with exactly OP_REACH_BISECT_STEPS bisections (§12.3, §12.4). */
+/* Implicit-midpoint reach maps with safeguarded bisection (§10.3, §10.4). */
 double op_dynamics_forward_reach(const op_vehicle *veh, const op_aero *aero,
                                  double q0, double qc, double ds, double K);
 double op_dynamics_brake_reach(const op_vehicle *veh, const op_aero *aero,

@@ -54,6 +54,10 @@ export interface RenderScene {
   savedLines: { color: string; spec: LineSpec }[];
   vehicles: SceneVehicle[];
   labels: SceneLabel[];
+  /** Low-contrast work state painted behind the track geometry. */
+  workLabel: "OPTIMIZING" | "VALIDATING" | null;
+  /** Editable custom-track guide nodes, rendered above the track. */
+  editNodes: [number, number][] | null;
 }
 
 export interface TrackRenderer {
@@ -75,6 +79,8 @@ export function emptyScene(): RenderScene {
     savedLines: [],
     vehicles: [],
     labels: [],
+    workLabel: null,
+    editNodes: null,
   };
 }
 

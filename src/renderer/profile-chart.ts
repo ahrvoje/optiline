@@ -1,5 +1,9 @@
 /** Multi-axis racing profile chart with selectable time/distance X axis. */
 import { CHART_COLORS, type ProfileNodeJson } from "@/model/contracts";
+import {
+  CONSTRAINT_COLORS,
+  type ProfileLimitDomain,
+} from "@/optimizer/constraint-domain";
 
 interface Series {
   shortName: string;
@@ -16,8 +20,14 @@ const SERIES: Series[] = [
   { shortName: "Ay", name: "Lateral accel", unit: "m/s²", color: CHART_COLORS.latAccel, values: n => n.q * n.curvature },
   { shortName: "St", name: "Stability", unit: "%", color: CHART_COLORS.utilization, values: n => 100 * n.stability },
   { shortName: "κ", name: "Curvature", unit: "1/m", color: CHART_COLORS.curvature, values: n => n.curvature },
-  { shortName: "Lim", name: "Limit", unit: "%", color: "#88919c", values: () => 100, dash: [5, 4] },
 ];
+
+export const PROFILE_CHART_LABELS = SERIES.map(({ shortName, name, unit, color }) => ({
+  shortName,
+  name,
+  unit,
+  color,
+}));
 
 export type ProfileXAxis = "time" | "distance";
 
@@ -29,6 +39,7 @@ export interface ChartProfile {
   /** Common track-centerline distances aligned with nodes. */
   axisDistances?: number[];
   axisLength?: number;
+  limitDomains?: ProfileLimitDomain[];
 }
 
 export interface ChartOptions {
@@ -44,8 +55,8 @@ const AXIS_COLUMN = 72;
 function chartLayout(width: number, height: number): Layout {
   const left = 12 + AXIS_COLUMN * SERIES.length;
   const right = 18;
-  const top = 44;
-  const bottom = 52;
+  const top = 12;
+  const bottom = 64;
   return { left, right, top, bottom, width: Math.max(1, width - left - right), height: Math.max(1, height - top - bottom) };
 }
 
@@ -64,7 +75,7 @@ function seriesRange(series: Series, nodes: ProfileNodeJson[]): Range {
   const values = nodes.map(series.values);
   let lo = Math.min(...values);
   let hi = Math.max(...values);
-  if (series.name === "Stability" || series.name === "Limit") {
+  if (series.name === "Stability") {
     lo = 0;
     hi = Math.max(110, hi);
   }
@@ -105,6 +116,33 @@ function distanceAtTime(profile: ChartProfile, time: number): number {
   const nextDistance = lo + 1 < nodes.length ? axisDistances?.[lo + 1] ?? b.distance : distance;
   const mix = (time - a.time) / Math.max(nextTime - a.time, 1e-12);
   return aDistance + mix * (nextDistance - aDistance);
+}
+
+function nodeAtTime(profile: ChartProfile, time: number): ProfileNodeJson {
+  const nodes = profile.nodes;
+  const lap = profileExtent(profile, "time");
+  const local = ((time % lap) + lap) % lap;
+  let lo = 0;
+  let hi = nodes.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (nodes[mid]!.time <= local) lo = mid;
+    else hi = mid - 1;
+  }
+  const a = nodes[lo]!;
+  const b = nodes[(lo + 1) % nodes.length]!;
+  const nextTime = lo + 1 < nodes.length ? b.time : lap;
+  const mix = (local - a.time) / Math.max(nextTime - a.time, 1e-12);
+  const blend = (left: number, right: number): number => left + mix * (right - left);
+  return {
+    parameter: blend(a.parameter, lo + 1 < nodes.length ? b.parameter : 64),
+    distance: blend(a.distance, lo + 1 < nodes.length ? b.distance : profileExtent(profile, "distance")),
+    time: local,
+    q: blend(a.q, b.q),
+    acceleration: blend(a.acceleration, b.acceleration),
+    curvature: blend(a.curvature, b.curvature),
+    stability: blend(a.stability, b.stability),
+  };
 }
 
 export function profileTimeAtCanvasX(
@@ -180,6 +218,7 @@ export function drawProfileChart(
 
   const extent = profileExtent(primary, options.xAxis);
   const ranges = SERIES.map(series => seriesRange(series, primary.nodes));
+  const focusedNode = options.cursorTime === null ? null : nodeAtTime(primary, options.cursorTime);
 
   ctx.font = "600 13px ui-monospace, monospace";
   for (let sIndex = 0; sIndex < SERIES.length; sIndex++) {
@@ -193,10 +232,7 @@ export function drawProfileChart(
     ctx.moveTo(axisX, layout.top);
     ctx.lineTo(axisX, layout.top + layout.height);
     ctx.stroke();
-    ctx.textAlign = "center";
-    ctx.font = "700 12px system-ui";
-    ctx.fillText(`${series.shortName} · ${series.unit}`, axisX - 26, 17);
-    ctx.font = "600 13px ui-monospace, monospace";
+    ctx.font = "650 14px ui-monospace, monospace";
     ctx.textAlign = "right";
     for (let tick = 0; tick <= 2; tick++) {
       const ratio = tick / 2;
@@ -207,6 +243,17 @@ export function drawProfileChart(
       ctx.lineTo(axisX + 3, y);
       ctx.stroke();
       ctx.fillText(tickText(value, series), axisX - 7, y + 4);
+    }
+    if (focusedNode) {
+      const value = series.values(focusedNode);
+      const y = layout.top + layout.height * (1 - (value - range.lo) / (range.hi - range.lo));
+      const text = tickText(value, series);
+      ctx.font = "750 16px ui-monospace, monospace";
+      const textWidth = ctx.measureText(text).width;
+      ctx.fillStyle = "#171b20ee";
+      ctx.fillRect(axisX - textWidth - 11, y - 10, textWidth + 8, 20);
+      ctx.fillStyle = series.color;
+      ctx.fillText(text, axisX - 7, y + 5);
     }
   }
 
@@ -220,15 +267,6 @@ export function drawProfileChart(
   }
   ctx.font = "11px system-ui";
   ctx.fillText(options.xAxis === "time" ? "LAP TIME (s)" : "TRACK CENTERLINE DISTANCE (m)", layout.left + layout.width / 2, height - 9);
-
-  ctx.textAlign = "left";
-  ctx.font = "600 11px system-ui";
-  let legendX = layout.left;
-  for (const series of SERIES) {
-    ctx.fillStyle = series.color;
-    ctx.fillText(series.name, legendX, 16);
-    legendX += ctx.measureText(series.name).width + 16;
-  }
 
   const accelerationRange = ranges[1]!;
   if (accelerationRange.lo <= 0 && accelerationRange.hi >= 0) {
@@ -297,6 +335,28 @@ export function drawProfileChart(
     ctx.lineWidth = 1;
     ctx.stroke();
     ctx.globalAlpha = 1;
+  }
+
+  const domains = primary.limitDomains;
+  if (domains?.length === primary.nodes.length) {
+    const ribbonY = layout.top + layout.height + 7;
+    const ribbonHeight = 10;
+    let start = 0;
+    for (let i = 1; i <= domains.length; i++) {
+      if (i < domains.length && domains[i] === domains[start]) continue;
+      const first = primary.nodes[start]!;
+      const x0 = layout.left + layout.width * xValue(
+        primary, first, start, options.xAxis,
+      ) / extent;
+      const x1 = i === domains.length
+        ? layout.left + layout.width
+        : layout.left + layout.width * xValue(
+            primary, primary.nodes[i]!, i, options.xAxis,
+          ) / extent;
+      ctx.fillStyle = CONSTRAINT_COLORS[domains[start] ?? "none"];
+      ctx.fillRect(x0, ribbonY, Math.max(1, x1 - x0), ribbonHeight);
+      start = i;
+    }
   }
 
   if (options.cursorTime !== null) {

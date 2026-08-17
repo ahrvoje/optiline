@@ -2,9 +2,9 @@
  * Optiline shared data contracts (PROJECT_SPECIFICATION.md §20, §21, App. C).
  *
  * This module is the authoritative TypeScript-side contract for worker
- * messages, persisted records, and application states. TypeScript never
- * holds an independent copy of the mathematics (§1); numeric results
- * always originate in C99/WASM or WGSL.
+ * messages, persisted records, and application states. Exact PH certification
+ * originates in C99/WASM; the V2 FP64 Fourier and curvature reference stages
+ * are shared TypeScript worker modules, and coarse population scores use WGSL.
  */
 
 /** Stable error codes (Appendix C). Errors are never identified by text. */
@@ -124,7 +124,7 @@ export const DEFAULT_VEHICLE: VehicleSettings = {
   massKg: 900,
   lengthM: 4.8,
   widthM: 2.0,
-  safetyMarginM: 0.05,
+  safetyMarginM: 0,
   vMaxMps: 91.6667,
   axPlus0: 6.0,
   axMinus0: 14.0,
@@ -250,6 +250,8 @@ export interface SavedProfileJson {
   lapTimeS: number;
   profileNodes: ProfileNodeJson[];
   certificate: CertificateReportJson & { hash: string };
+  /** V2 discovery, canonical curvature, and optimality output. */
+  v2Representations?: V2RepresentationsJson;
 }
 
 export interface ProfileNodeJson {
@@ -260,6 +262,76 @@ export interface ProfileNodeJson {
   acceleration: number;
   curvature: number;
   stability: number;
+}
+
+export interface DiscoveryRepresentationJson {
+  schemaVersion: 2;
+  kernelChartId: string;
+  kernelModeCount: number;
+  lateralFourierModes: number;
+  lateralFourierCoefficients: number[];
+  residualControlCount: number;
+  residualCoefficients: number[];
+  corridor: { lowerM: number; upperM: number; betaSafeRad: number };
+}
+
+export interface FinalCurvatureRepresentationJson {
+  schemaVersion: 2;
+  pathLengthM: number;
+  winding: -1 | 1;
+  fourierModes: number;
+  fourierCoefficients: number[];
+  residualControlCount: number;
+  residualCoefficients: number[];
+  closureModes: Array<
+    | { kind: "constant" }
+    | { kind: "cos" | "sin"; harmonic: number }
+    | { kind: "bspline"; controlCount: number; index: number }
+  >;
+  closureCoefficients: number[];
+  rigidTransform: { rotationRad: number; translationM: [number, number] };
+  seamPhase: number;
+  closureResiduals: { turn: number; x: number; y: number; maxAbs: number };
+}
+
+export interface OptimalityReportJson {
+  closure: { turn: number; x: number; y: number; maxAbs: number };
+  geometry: {
+    lengthM: number;
+    maxAbsCurvature: number;
+    maxAbsCurvatureL: number;
+    maxAbsCurvatureLL: number;
+    minPathMetric: number;
+    minProgress: number;
+  };
+  rectangle: { minimumClearanceM: number; continuouslyBounded: boolean };
+  dynamics: {
+    minimumSpeedMps: number;
+    maximumSpeedMps: number;
+    maximumAccelerationMps2: number;
+    maximumBrakingMps2: number;
+    maximumLateralAccelerationMps2: number;
+    maximumSuperellipseUtilization: number;
+    maximumDragAccelerationMps2: number;
+    maximumDownforceMultiplier: number;
+    speedOptimalityResidual: number;
+    maxLateralJerk: number;
+    rmsLateralJerk: number;
+  };
+  convergence: {
+    meshLapTimesS: [number, number, number] | null;
+    meshLapTimeDeltaS: number | null;
+    bestTestedDescentS: number | null;
+    fourierExtensionImprovementS: number | null;
+    splineRefinementImprovementS: number | null;
+    curvatureRefinementImprovementS: number | null;
+  };
+}
+
+export interface V2RepresentationsJson {
+  discovery: DiscoveryRepresentationJson;
+  curvature: FinalCurvatureRepresentationJson;
+  optimality: OptimalityReportJson;
 }
 
 /* ------------------------------------------------------------------ */
@@ -286,6 +358,7 @@ export type OptimizerCommand = MessageEnvelope &
     | { type: "start"; seedGenotype: Float64Array | null; checkpoint: ArrayBuffer | null }
     | { type: "stop" }
     | { type: "setCandidateVisibility"; count: number }
+    | { type: "setBackgroundExecution"; enabled: boolean }
     | { type: "shutdown" }
   );
 
@@ -303,6 +376,16 @@ export type OptimizerEvent = MessageEnvelope &
         rejectionCounts: number[]; // 13 entries, §14.5 order
         provisionalLapTime: number | null;
         batchLatencyMs: { median: number; p95: number; worst: number };
+        /** Active multi-fidelity level of the hierarchical optimizer. */
+        stage: "fourier" | "spline" | "curvature" | "smoothing";
+        /** Rates are intentionally separate; a proxy is not a certified lap. */
+        throughput: {
+          stationPerSecond: number;
+          proxyPerSecond: number;
+          fullPerSecond: number;
+          curvaturePerSecond: number;
+          certifiedPerSecond: number;
+        };
       }
     | {
         type: "displayCandidates";
@@ -312,10 +395,23 @@ export type OptimizerEvent = MessageEnvelope &
       }
     | {
         type: "provisionalBest";
+        /** Score domain. Only candidates in the same domain are comparable
+         * before binary64 certification. */
+        candidateSpace: "discovery" | "curvature";
+        /** Queue identity. Comparable live updates share a key; retained final
+         * elites use distinct keys so each receives authoritative certification. */
+        candidateKey: string;
         lapTime: number;
         genotype: Float64Array;
         preimage: Float64Array; // 256 = 128 complex pairs
         candidateId: number;
+        /** Present after the mandatory V2 curvature-space stage. */
+        representations?: V2RepresentationsJson;
+      }
+    | {
+        type: "warning";
+        stage: "curvature";
+        message: string;
       }
     | { type: "stopped"; checkpoint: ArrayBuffer }
     | { type: "deviceLost"; reason: string }
@@ -338,11 +434,12 @@ export type CertifierCommand = MessageEnvelope &
         candidateId: number;
       }
     | {
-        type: "polishCandidate";
+        type: "certifyCurvature";
         compiledTrack: CompiledTrackJson;
         vehicle: VehicleSettings;
         genotype: Float64Array;
-        warmPreimage?: Float64Array;
+        preimage: Float64Array;
+        representations: V2RepresentationsJson;
         provisionalLapTime: number;
         candidateId: number;
       }
@@ -367,6 +464,19 @@ export type CertifierEvent = MessageEnvelope &
         preimage: Float64Array;
         profileNodes: Float64Array; // packed 7 doubles per node (§20.3 order)
         edgeCount: number;
+        certificate: CertificateReportJson;
+      }
+    | {
+        type: "curvatureCertified";
+        candidateId: number;
+        genotype: Float64Array;
+        preimage: Float64Array;
+        lapTime: number;
+        lineLengthM: number;
+        profileNodes: Float64Array;
+        edgeCount: number;
+        pathSamples: Float64Array;
+        representations: V2RepresentationsJson;
         certificate: CertificateReportJson;
       }
     | { type: "certificationFailed"; candidateId: number; error: OpError }

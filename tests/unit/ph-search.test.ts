@@ -157,16 +157,18 @@ describe("PH harmonic search", () => {
     expect(broadLap).toBeLessThan(centerLap - 0.005);
   });
 
-  it("keeps the WGSL mode and basis layout synchronized", () => {
-    expect(shaderSource).toContain(`const PREIMAGE_MODE_COUNT=${SEARCH_PREIMAGE_MODE_COUNT}u;`);
-    expect(shaderSource).toContain(`const START_MODE=${SEARCH_START_MODE}u;`);
-    expect(shaderSource).toContain(`const SEARCH_MODE_COUNT=${SEARCH_MODE_COUNT}u;`);
-    expect(shaderSource).toContain(`const BASIS_STRIDE=${SEARCH_BASIS_COUNT}u;`);
-    expect(shaderSource).toContain("var speedSquared: array<f32,64>;");
-    expect(shaderSource).toContain("for (var sweep=0u; sweep<3u; sweep++)");
-    expect(shaderSource).toContain("let axm=settings[8]");
-    expect(shaderSource).toContain("correction.x * basisControl(index, CLOSURE_MODE_A)");
-    expect(shaderSource).toContain("curvatureSample<=8u");
-    expect(shaderSource).toContain("SMOOTH_CANDIDATE_COUNT=384u");
+  it("uses the periodic lateral-field WGSL contract", () => {
+    expect(shaderSource).toContain("coefficients: array<f32>");
+    expect(shaderSource).toContain("referenceGeometry: array<vec4f>");
+    expect(shaderSource).toContain("basisTable: array<vec4f>");
+    expect(shaderSource).toContain(
+      "for (var coefficientIndex = 0u; coefficientIndex < coefficientCount; coefficientIndex++)",
+    );
+    expect(shaderSource).toContain("let eta = tanh(z)");
+    expect(shaderSource).toContain("let station = flatIndex / candidateCount");
+    expect(shaderSource).toContain("let r1 = c1 + d1 * n0 + d * n1");
+    expect(shaderSource).toContain("let curvature = cross2(r1, r2)");
+    expect(shaderSource).toContain("lateralCapacity * downforce");
+    expect(shaderSource).not.toContain("PREIMAGE_MODE_COUNT");
   });
 });

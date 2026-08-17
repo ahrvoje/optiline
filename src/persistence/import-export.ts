@@ -11,7 +11,12 @@
  * Error text identifies the offending field and rule and never renders
  * raw untrusted content (§26).
  */
-import type { SavedProfileJson, TrackSourceJson, VehicleSettings } from "@/model/contracts";
+import type {
+  SavedProfileJson,
+  TrackSourceJson,
+  V2RepresentationsJson,
+  VehicleSettings,
+} from "@/model/contracts";
 import { GATE_COUNT } from "@/model/contracts";
 
 export const MAX_IMPORT_BYTES = 20 * 1024 * 1024; // 20 MiB (§26)
@@ -265,6 +270,9 @@ export function validateProfileShape(value: unknown): SavedProfileJson {
     return out as unknown as SavedProfileJson["profileNodes"][number];
   });
   const certificate = requireObject(obj["certificate"], "certificate");
+  const v2Representations = obj["v2Representations"] === undefined
+    ? undefined
+    : validateV2Representations(obj["v2Representations"]);
   // The imported profile object is passed to the certifier worker; the
   // worker recomputes and replaces every certificate field, so only the
   // structural presence is checked here.
@@ -289,7 +297,297 @@ export function validateProfileShape(value: unknown): SavedProfileJson {
     lapTimeS,
     profileNodes,
     certificate: certificate as unknown as SavedProfileJson["certificate"],
+    ...(v2Representations === undefined ? {} : { v2Representations }),
   };
+}
+
+function finiteArray(value: unknown, field: string, exactLength: number): number[] {
+  if (!Array.isArray(value) || value.length !== exactLength ||
+      value.some(item => typeof item !== "number" || !Number.isFinite(item))) {
+    throw new ImportError(field, `must contain exactly ${exactLength} finite numbers`);
+  }
+  return value as number[];
+}
+
+function nullableFinite(value: unknown, field: string): number | null {
+  if (value === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new ImportError(field, "must be null or a finite number");
+  }
+  return value;
+}
+
+function validateV2Representations(value: unknown): V2RepresentationsJson {
+  const root = requireObject(value, "v2Representations");
+  const discovery = requireObject(root["discovery"], "v2Representations.discovery");
+  const curvature = requireObject(root["curvature"], "v2Representations.curvature");
+  const optimality = requireObject(root["optimality"], "v2Representations.optimality");
+  if (discovery["schemaVersion"] !== 2 || curvature["schemaVersion"] !== 2) {
+    throw new ImportError("v2Representations.schemaVersion", "both representations must be V2");
+  }
+  const lateralModes = requireInteger(
+    discovery,
+    "lateralFourierModes",
+    "v2Representations.discovery.lateralFourierModes",
+    0,
+    128,
+  );
+  const residualCount = requireInteger(
+    discovery,
+    "residualControlCount",
+    "v2Representations.discovery.residualControlCount",
+    0,
+    1024,
+  );
+  const corridor = requireObject(
+    discovery["corridor"],
+    "v2Representations.discovery.corridor",
+  );
+  const curvatureModes = requireInteger(
+    curvature,
+    "fourierModes",
+    "v2Representations.curvature.fourierModes",
+    0,
+    128,
+  );
+  const curvatureResidualCount = requireInteger(
+    curvature,
+    "residualControlCount",
+    "v2Representations.curvature.residualControlCount",
+    0,
+    1024,
+  );
+  const closureModesRaw = requireBoundedArray(curvature, "closureModes", 3);
+  if (closureModesRaw.length !== 3) {
+    throw new ImportError("v2Representations.curvature.closureModes", "must contain three modes");
+  }
+  const closureModes = closureModesRaw.map((raw, index) => {
+    const mode = requireObject(raw, `v2Representations.curvature.closureModes[${index}]`);
+    const kind = mode["kind"];
+    if (kind === "constant") return { kind: "constant" as const };
+    if (kind === "cos" || kind === "sin") {
+      return {
+        kind: kind as "cos" | "sin",
+        harmonic: requireInteger(
+          mode,
+          "harmonic",
+          `v2Representations.curvature.closureModes[${index}].harmonic`,
+          1,
+          128,
+        ),
+      };
+    }
+    if (kind === "bspline") {
+      return {
+        kind: "bspline" as const,
+        controlCount: requireInteger(
+          mode,
+          "controlCount",
+          `v2Representations.curvature.closureModes[${index}].controlCount`,
+          6,
+          1024,
+        ),
+        index: requireInteger(
+          mode,
+          "index",
+          `v2Representations.curvature.closureModes[${index}].index`,
+          0,
+          1023,
+        ),
+      };
+    }
+    throw new ImportError(
+      `v2Representations.curvature.closureModes[${index}].kind`,
+      "must identify a supported closure mode",
+    );
+  });
+  if (closureModes[0]?.kind !== "constant") {
+    throw new ImportError(
+      "v2Representations.curvature.closureModes[0]",
+      "must reserve the constant total-turn correction",
+    );
+  }
+  for (const [index, mode] of closureModes.entries()) {
+    if (mode.kind === "bspline" && mode.index >= mode.controlCount) {
+      throw new ImportError(
+        `v2Representations.curvature.closureModes[${index}].index`,
+        "must be less than controlCount",
+      );
+    }
+  }
+  const transform = requireObject(
+    curvature["rigidTransform"],
+    "v2Representations.curvature.rigidTransform",
+  );
+  const translation = finiteArray(
+    transform["translationM"],
+    "v2Representations.curvature.rigidTransform.translationM",
+    2,
+  );
+  const closure = requireObject(
+    curvature["closureResiduals"],
+    "v2Representations.curvature.closureResiduals",
+  );
+  const reportClosure = requireObject(
+    optimality["closure"],
+    "v2Representations.optimality.closure",
+  );
+  const geometry = requireObject(
+    optimality["geometry"],
+    "v2Representations.optimality.geometry",
+  );
+  const rectangle = requireObject(
+    optimality["rectangle"],
+    "v2Representations.optimality.rectangle",
+  );
+  const dynamics = requireObject(
+    optimality["dynamics"],
+    "v2Representations.optimality.dynamics",
+  );
+  const convergence = requireObject(
+    optimality["convergence"],
+    "v2Representations.optimality.convergence",
+  );
+  const residualObject = (object: Record<string, unknown>, prefix: string) => ({
+    turn: finiteFrom(object, "turn", prefix),
+    x: finiteFrom(object, "x", prefix),
+    y: finiteFrom(object, "y", prefix),
+    maxAbs: finiteFrom(object, "maxAbs", prefix),
+  });
+  const meshRaw = convergence["meshLapTimesS"];
+  const meshLapTimesS = meshRaw === null
+    ? null
+    : finiteArray(meshRaw, "v2Representations.optimality.convergence.meshLapTimesS", 3) as
+      [number, number, number];
+  const winding = curvature["winding"];
+  if (winding !== -1 && winding !== 1) {
+    throw new ImportError("v2Representations.curvature.winding", "must be -1 or +1");
+  }
+  const lowerM = finiteFrom(corridor, "lowerM", "v2Representations.discovery.corridor");
+  const upperM = finiteFrom(corridor, "upperM", "v2Representations.discovery.corridor");
+  if (lowerM > upperM) {
+    throw new ImportError("v2Representations.discovery.corridor", "lowerM exceeds upperM");
+  }
+  return {
+    discovery: {
+      schemaVersion: 2,
+      kernelChartId: requireString(discovery, "kernelChartId", 256),
+      kernelModeCount: requireInteger(
+        discovery, "kernelModeCount", "v2Representations.discovery.kernelModeCount", 1, 256,
+      ),
+      lateralFourierModes: lateralModes,
+      lateralFourierCoefficients: finiteArray(
+        discovery["lateralFourierCoefficients"],
+        "v2Representations.discovery.lateralFourierCoefficients",
+        1 + 2 * lateralModes,
+      ),
+      residualControlCount: residualCount,
+      residualCoefficients: finiteArray(
+        discovery["residualCoefficients"],
+        "v2Representations.discovery.residualCoefficients",
+        residualCount,
+      ),
+      corridor: {
+        lowerM,
+        upperM,
+        betaSafeRad: finiteFrom(corridor, "betaSafeRad", "v2Representations.discovery.corridor"),
+      },
+    },
+    curvature: {
+      schemaVersion: 2,
+      pathLengthM: finiteFrom(curvature, "pathLengthM", "v2Representations.curvature"),
+      winding,
+      fourierModes: curvatureModes,
+      fourierCoefficients: finiteArray(
+        curvature["fourierCoefficients"],
+        "v2Representations.curvature.fourierCoefficients",
+        1 + 2 * curvatureModes,
+      ),
+      residualControlCount: curvatureResidualCount,
+      residualCoefficients: finiteArray(
+        curvature["residualCoefficients"],
+        "v2Representations.curvature.residualCoefficients",
+        curvatureResidualCount,
+      ),
+      closureModes,
+      closureCoefficients: finiteArray(
+        curvature["closureCoefficients"],
+        "v2Representations.curvature.closureCoefficients",
+        3,
+      ),
+      rigidTransform: {
+        rotationRad: finiteFrom(
+          transform, "rotationRad", "v2Representations.curvature.rigidTransform",
+        ),
+        translationM: [translation[0]!, translation[1]!],
+      },
+      seamPhase: finiteFrom(curvature, "seamPhase", "v2Representations.curvature"),
+      closureResiduals: residualObject(closure, "v2Representations.curvature.closureResiduals"),
+    },
+    optimality: {
+      closure: residualObject(reportClosure, "v2Representations.optimality.closure"),
+      geometry: {
+        lengthM: finiteFrom(geometry, "lengthM", "v2Representations.optimality.geometry"),
+        maxAbsCurvature: finiteFrom(geometry, "maxAbsCurvature", "v2Representations.optimality.geometry"),
+        maxAbsCurvatureL: finiteFrom(geometry, "maxAbsCurvatureL", "v2Representations.optimality.geometry"),
+        maxAbsCurvatureLL: finiteFrom(geometry, "maxAbsCurvatureLL", "v2Representations.optimality.geometry"),
+        minPathMetric: finiteFrom(geometry, "minPathMetric", "v2Representations.optimality.geometry"),
+        minProgress: finiteFrom(geometry, "minProgress", "v2Representations.optimality.geometry"),
+      },
+      rectangle: {
+        minimumClearanceM: finiteFrom(rectangle, "minimumClearanceM", "v2Representations.optimality.rectangle"),
+        continuouslyBounded: rectangle["continuouslyBounded"] === true,
+      },
+      dynamics: {
+        minimumSpeedMps: finiteFrom(dynamics, "minimumSpeedMps", "v2Representations.optimality.dynamics"),
+        maximumSpeedMps: finiteFrom(dynamics, "maximumSpeedMps", "v2Representations.optimality.dynamics"),
+        maximumAccelerationMps2: finiteFrom(dynamics, "maximumAccelerationMps2", "v2Representations.optimality.dynamics"),
+        maximumBrakingMps2: finiteFrom(dynamics, "maximumBrakingMps2", "v2Representations.optimality.dynamics"),
+        maximumLateralAccelerationMps2: finiteFrom(dynamics, "maximumLateralAccelerationMps2", "v2Representations.optimality.dynamics"),
+        maximumSuperellipseUtilization: finiteFrom(dynamics, "maximumSuperellipseUtilization", "v2Representations.optimality.dynamics"),
+        maximumDragAccelerationMps2: finiteFrom(dynamics, "maximumDragAccelerationMps2", "v2Representations.optimality.dynamics"),
+        maximumDownforceMultiplier: finiteFrom(dynamics, "maximumDownforceMultiplier", "v2Representations.optimality.dynamics"),
+        speedOptimalityResidual: finiteFrom(dynamics, "speedOptimalityResidual", "v2Representations.optimality.dynamics"),
+        maxLateralJerk: finiteFrom(dynamics, "maxLateralJerk", "v2Representations.optimality.dynamics"),
+        rmsLateralJerk: finiteFrom(dynamics, "rmsLateralJerk", "v2Representations.optimality.dynamics"),
+      },
+      convergence: {
+        meshLapTimesS,
+        meshLapTimeDeltaS: nullableFinite(convergence["meshLapTimeDeltaS"], "v2Representations.optimality.convergence.meshLapTimeDeltaS"),
+        bestTestedDescentS: nullableFinite(convergence["bestTestedDescentS"], "v2Representations.optimality.convergence.bestTestedDescentS"),
+        fourierExtensionImprovementS: nullableFinite(convergence["fourierExtensionImprovementS"], "v2Representations.optimality.convergence.fourierExtensionImprovementS"),
+        splineRefinementImprovementS: nullableFinite(convergence["splineRefinementImprovementS"], "v2Representations.optimality.convergence.splineRefinementImprovementS"),
+        curvatureRefinementImprovementS: nullableFinite(convergence["curvatureRefinementImprovementS"], "v2Representations.optimality.convergence.curvatureRefinementImprovementS"),
+      },
+    },
+  };
+}
+
+function finiteFrom(
+  object: Record<string, unknown>,
+  key: string,
+  prefix: string,
+): number {
+  const value = object[key];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new ImportError(`${prefix}.${key}`, "must be a finite number");
+  }
+  return value;
+}
+
+function requireInteger(
+  object: Record<string, unknown>,
+  key: string,
+  field: string,
+  minimum: number,
+  maximum: number,
+): number {
+  const value = object[key];
+  if (typeof value !== "number" || !Number.isInteger(value) ||
+      value < minimum || value > maximum) {
+    throw new ImportError(field, `must be an integer in [${minimum}, ${maximum}]`);
+  }
+  return value;
 }
 
 function validateVehicleShape(value: unknown): VehicleSettings {

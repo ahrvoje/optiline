@@ -25,12 +25,29 @@ import type { WorldBounds } from "@/renderer/camera";
 import { boundsOfPoints, unionBounds } from "@/renderer/camera";
 
 /** One racing line: 128 complex preimage pairs + 64 gate point pairs. */
-export interface LineSpec {
+export interface PhLineSpec {
+  kind?: "ph";
   /** Packed re,im — length 256. */
   preimage: Float64Array;
   /** Packed x,y — length 128. */
   gates: Float64Array;
 }
+
+/**
+ * Display cache for an authoritative intrinsic-curvature trajectory.
+ * Samples are uniform in arc length and packed as x,y,tx,ty,kappa. The
+ * preimage and gates are a legacy PH shadow only; no trajectory operation
+ * reads them when kind is "curvature".
+ */
+export interface CurvatureLineSpec {
+  kind: "curvature";
+  preimage: Float64Array;
+  gates: Float64Array;
+  pathLengthM: number;
+  samples: Float64Array;
+}
+
+export type LineSpec = PhLineSpec | CurvatureLineSpec;
 
 const H = 0.5; // compiled span width (§8.2)
 const MAX_DEPTH = 16;
@@ -142,6 +159,13 @@ export function lineDistancesAtParameters(
   spec: LineSpec,
   parameters: ArrayLike<number>,
 ): { distances: number[]; totalLength: number } {
+  if (spec.kind === "curvature") {
+    return {
+      distances: Array.from(parameters, parameter =>
+        Math.max(0, Math.min(GATE_COUNT, parameter)) / GATE_COUNT * spec.pathLengthM),
+      totalLength: spec.pathLengthM,
+    };
+  }
   const prefix = new Float64Array(SPAN_COUNT + 1);
   for (let span = 0; span < SPAN_COUNT; span++) {
     prefix[span + 1] = prefix[span]! + spanArcForward(spec.preimage, span, 1);
@@ -200,7 +224,7 @@ export function spanDisplacement(
  * P_i + Φ(b_{2i}). Returns Float64Array of 128 × 6 complex controls
  * (128 * 12 numbers).
  */
-export function buildPositionControls(spec: LineSpec): Float64Array {
+export function buildPositionControls(spec: PhLineSpec): Float64Array {
   const out = new Float64Array(SPAN_COUNT * 12);
   for (let i = 0; i < GATE_COUNT; i++) {
     const px = spec.gates[2 * i]!;
@@ -292,7 +316,7 @@ export interface LineFrame {
 }
 
 function evaluateLineFrameWithControls(
-  spec: LineSpec,
+  spec: PhLineSpec,
   controls: Float64Array,
   parameter: number,
 ): LineFrame {
@@ -321,11 +345,55 @@ function evaluateLineFrameWithControls(
 }
 
 export function evaluateLineFrame(spec: LineSpec, parameter: number): LineFrame {
+  if (spec.kind === "curvature") return evaluateCurvatureFrame(spec, parameter);
   return evaluateLineFrameWithControls(spec, buildPositionControls(spec), parameter);
+}
+
+function evaluateCurvatureFrame(spec: CurvatureLineSpec, parameter: number): LineFrame {
+  const count = spec.samples.length / 5;
+  if (!Number.isInteger(count) || count < 8) throw new Error("invalid curvature line cache");
+  const wrapped = ((parameter % GATE_COUNT) + GATE_COUNT) % GATE_COUNT;
+  const sample = wrapped / GATE_COUNT * count;
+  const index = Math.floor(sample) % count;
+  const next = (index + 1) % count;
+  const t = sample - Math.floor(sample);
+  const a = 5 * index;
+  const b = 5 * next;
+  const segmentLength = spec.pathLengthM / count;
+  const t2 = t * t;
+  const t3 = t2 * t;
+  const h00 = 2 * t3 - 3 * t2 + 1;
+  const h10 = t3 - 2 * t2 + t;
+  const h01 = -2 * t3 + 3 * t2;
+  const h11 = t3 - t2;
+  const dh00 = 6 * t2 - 6 * t;
+  const dh10 = 3 * t2 - 4 * t + 1;
+  const dh01 = -dh00;
+  const dh11 = 3 * t2 - 2 * t;
+  const x = h00 * spec.samples[a]! + h10 * segmentLength * spec.samples[a + 2]! +
+    h01 * spec.samples[b]! + h11 * segmentLength * spec.samples[b + 2]!;
+  const y = h00 * spec.samples[a + 1]! + h10 * segmentLength * spec.samples[a + 3]! +
+    h01 * spec.samples[b + 1]! + h11 * segmentLength * spec.samples[b + 3]!;
+  const dx = dh00 * spec.samples[a]! + dh10 * segmentLength * spec.samples[a + 2]! +
+    dh01 * spec.samples[b]! + dh11 * segmentLength * spec.samples[b + 2]!;
+  const dy = dh00 * spec.samples[a + 1]! + dh10 * segmentLength * spec.samples[a + 3]! +
+    dh01 * spec.samples[b + 1]! + dh11 * segmentLength * spec.samples[b + 3]!;
+  const metric = Math.max(Math.hypot(dx, dy), 1e-15);
+  return {
+    x,
+    y,
+    tx: dx / metric,
+    ty: dy / metric,
+    kappa: (1 - t) * spec.samples[a + 4]! + t * spec.samples[b + 4]!,
+  };
 }
 
 /** Fixed equal-parameter samples with one position-control construction. */
 export function sampleLineFrames(spec: LineSpec, count: number): LineFrame[] {
+  if (spec.kind === "curvature") {
+    return Array.from({ length: count }, (_, i) =>
+      evaluateCurvatureFrame(spec, GATE_COUNT * i / count));
+  }
   const controls = buildPositionControls(spec);
   return Array.from({ length: count }, (_, i) =>
     evaluateLineFrameWithControls(spec, controls, (GATE_COUNT * i) / count),
@@ -341,6 +409,16 @@ export function sampleLineFrames(spec: LineSpec, count: number): LineFrame[] {
  * closure, §15.1).
  */
 export function tessellateLine(spec: LineSpec, tolWorld: number): Float32Array {
+  if (spec.kind === "curvature") {
+    const count = spec.samples.length / 5;
+    const points = new Float32Array(2 * (count + 1));
+    for (let i = 0; i <= count; i++) {
+      const source = 5 * (i % count);
+      points[2 * i] = spec.samples[source]!;
+      points[2 * i + 1] = spec.samples[source + 1]!;
+    }
+    return points;
+  }
   const controls = buildPositionControls(spec);
   const pts: number[] = [];
   const first = evalSpan(controls, 0, 0);
@@ -414,7 +492,7 @@ export function racingLineFromPreimage(
   track: CompiledTrackJson,
   genotype: ArrayLike<number>,
   preimage: Float64Array,
-): LineSpec {
+): PhLineSpec {
   const targetGates = racingLineGatePoints(track, genotype);
   return {
     preimage,
@@ -445,7 +523,7 @@ export function flattenPairs(pairs: [number, number][]): Float64Array {
 }
 
 /** LineSpec of the compiled track's centerline. */
-export function centerlineSpec(track: CompiledTrackJson): LineSpec {
+export function centerlineSpec(track: CompiledTrackJson): PhLineSpec {
   return {
     preimage: flattenPairs(track.centerPreimageControls),
     gates: flattenPairs(track.gatePoints),
@@ -457,7 +535,7 @@ export function centerlineSpec(track: CompiledTrackJson): LineSpec {
  * The returned spans share exact endpoints, and the final span ends at
  * the first offset point because the source PH line is periodic.
  */
-export function exactOffsetBoundary(spec: LineSpec, signedDistance: number): RationalOffsetSpanJson[] {
+export function exactOffsetBoundary(spec: PhLineSpec, signedDistance: number): RationalOffsetSpanJson[] {
   const positions = buildPositionControls(spec);
   const out: RationalOffsetSpanJson[] = [];
   for (let span = 0; span < SPAN_COUNT; span++) {

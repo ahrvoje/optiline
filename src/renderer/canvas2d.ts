@@ -29,6 +29,14 @@ export class Canvas2DRenderer implements TrackRenderer {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = BACKGROUND_COLOR; ctx.fillRect(0, 0, width, height);
     const m = worldToScreenMatrix(scene.camera, width, height);
+    if (scene.workLabel) {
+      ctx.save();
+      ctx.fillStyle = scene.workLabel === "OPTIMIZING" ? "#ff9a4218" : "#6ed9eb18";
+      ctx.font = `800 ${Math.max(34, Math.min(76, width / 10))}px system-ui`;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(scene.workLabel, width / 2, height / 2);
+      ctx.restore();
+    }
     for (const primitive of buildDisplayList(scene, width, height, this.#cache)) {
       if (primitive.kind === "line") {
         if (primitive.pts.length < 4) continue;
@@ -47,6 +55,22 @@ export class Canvas2DRenderer implements TrackRenderer {
           const c = applyAffine(m, primitive.tris[i + 4]!, primitive.tris[i + 5]!);
           ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.lineTo(c[0],c[1]);ctx.closePath();ctx.fill();
         }
+      }
+    }
+    if (scene.editNodes && scene.editNodes.length > 0) {
+      ctx.setLineDash([]); ctx.lineWidth = 1; ctx.strokeStyle = "#ff9a4277";
+      ctx.beginPath();
+      for (let i = 0; i <= scene.editNodes.length; i++) {
+        const node = scene.editNodes[i % scene.editNodes.length]!;
+        const p = applyAffine(m, node[0], node[1]);
+        if (i === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]);
+      }
+      ctx.stroke();
+      for (const node of scene.editNodes) {
+        const p = applyAffine(m, node[0], node[1]);
+        ctx.beginPath(); ctx.arc(p[0], p[1], 4.5, 0, 2 * Math.PI);
+        ctx.fillStyle = "#12161b"; ctx.fill();
+        ctx.strokeStyle = "#ffad66"; ctx.lineWidth = 1.5; ctx.stroke();
       }
     }
     ctx.setTransform(dpr,0,0,dpr,0,0);ctx.font="700 12px system-ui";ctx.textBaseline="middle";

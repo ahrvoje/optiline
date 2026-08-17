@@ -1,9 +1,9 @@
 {
   "name": "optiline",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "Certified PH-spline racing-line optimizer (static web app).",
+  "description": "Certified intrinsic-curvature racing-line optimizer (static WebGPU app).",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

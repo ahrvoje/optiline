@@ -7,15 +7,16 @@ export interface EvaluatedProfile { lapTime: number; lineLength: number; nodes: 
 function remainingLongitudinalCapacity(
   vehicle: VehicleSettings,
   gamma: number,
-  qLow: number,
-  qHigh: number,
+  q: number,
   curvature: number,
 ): number {
-  const loadHigh = 1 + gamma * qHigh;
-  const lateralUse = qHigh * curvature / (vehicle.ay0 * loadHigh);
-  if (!(loadHigh > 0) || lateralUse > 1) return 0;
-  return Math.max(0, 1 - Math.max(0, lateralUse) ** vehicle.ellipseP) **
-    (1 / vehicle.ellipseP) * (1 + gamma * qLow);
+  const load = 1 + gamma * q;
+  const lateralUse = Math.abs(q * curvature) / (vehicle.ay0 * load);
+  if (!(load > 0) || lateralUse > 1) return 0;
+  const remainder = vehicle.ellipseP === 2
+    ? Math.sqrt(Math.max(0, 1 - lateralUse * lateralUse))
+    : Math.max(0, 1 - lateralUse ** vehicle.ellipseP) ** (1 / vehicle.ellipseP);
+  return load * remainder;
 }
 
 function forwardReach(
@@ -28,11 +29,15 @@ function forwardReach(
   curvature: number,
 ): number {
   if (cap <= q0) return cap;
-  const feasible = (q: number): boolean =>
-    (q - q0) / (2 * ds) + delta * q <= vehicle.axPlus0 *
-      remainingLongitudinalCapacity(vehicle, gamma, q0, q, curvature);
+  const feasible = (q: number): boolean => {
+    const midpoint = 0.5 * (q0 + q);
+    const net = vehicle.axPlus0 *
+      remainingLongitudinalCapacity(vehicle, gamma, midpoint, curvature) - delta * midpoint;
+    return q <= q0 + 2 * ds * net;
+  };
   if (feasible(cap)) return cap;
-  let low = q0, high = cap;
+  let low = 0, high = cap;
+  if (!feasible(low)) return 0;
   for (let i = 0; i < 20; i++) {
     const mid = 0.5 * (low + high);
     if (feasible(mid)) low = mid; else high = mid;
@@ -51,14 +56,14 @@ function brakingReach(
 ): number {
   if (cap <= q1) return cap;
   const feasible = (q: number): boolean => {
-    const remaining = remainingLongitudinalCapacity(vehicle, gamma, q1, q, curvature);
-    const positiveCapacity = vehicle.axPlus0 * remaining;
-    if (delta * q > positiveCapacity) return false;
-    const brakingNeed = Math.max(0, (q - q1) / (2 * ds) - delta * q1);
-    return brakingNeed <= vehicle.axMinus0 * remaining;
+    const midpoint = 0.5 * (q1 + q);
+    const braking = vehicle.axMinus0 *
+      remainingLongitudinalCapacity(vehicle, gamma, midpoint, curvature) + delta * midpoint;
+    return q <= q1 + 2 * ds * braking;
   };
   if (feasible(cap)) return cap;
-  let low = q1, high = cap;
+  let low = 0, high = cap;
+  if (!feasible(low)) return 0;
   for (let i = 0; i < 20; i++) {
     const mid = 0.5 * (low + high);
     if (feasible(mid)) low = mid; else high = mid;
@@ -79,27 +84,32 @@ export function evaluateProfile(spec: LineSpec, vehicle: VehicleSettings, count 
   }
   for (let i = 0; i < count; i++) {
     const k = Math.max(edgeK[(i + count - 1) % count]!, edgeK[i]!);
-    const c = ((delta / vehicle.axPlus0) ** vehicle.ellipseP +
-      (k / vehicle.ay0) ** vehicle.ellipseP) ** (1 / vehicle.ellipseP);
-    const steady = c > gamma ? 1 / (c - gamma) : Infinity;
-    q[i] = Math.min(vehicle.vMaxMps ** 2, steady);
+    const denominator = k - vehicle.ay0 * gamma;
+    const lateral = denominator > 0 ? vehicle.ay0 / denominator : Infinity;
+    q[i] = Math.min(vehicle.vMaxMps ** 2, lateral);
     if (vehicle.kappaMax !== null && k > vehicle.kappaMax) q[i] = 0;
   }
   // Periodic force-limited envelope with the same ellipse, drag, downforce,
   // and bisection equations as the authoritative C99 solver.
-  for (let pass = 0; pass < 8; pass++) {
+  for (let pass = 0; pass < 256; pass++) {
+    let relativeChange = 0;
     for (let i = 0; i < count; i++) {
       const next = (i + 1) % count;
-      q[next] = Math.min(q[next]!, forwardReach(
+      const prior = q[next]!;
+      q[next] = Math.min(prior, forwardReach(
         vehicle, delta, gamma, q[i]!, q[next]!, ds[i]!, edgeK[i]!,
       ));
+      relativeChange = Math.max(relativeChange, Math.abs(prior - q[next]!) / (1 + prior));
     }
     for (let i = count - 1; i >= 0; i--) {
       const next = (i + 1) % count;
-      q[i] = Math.min(q[i]!, brakingReach(
+      const prior = q[i]!;
+      q[i] = Math.min(prior, brakingReach(
         vehicle, delta, gamma, q[next]!, q[i]!, ds[i]!, edgeK[i]!,
       ));
+      relativeChange = Math.max(relativeChange, Math.abs(prior - q[i]!) / (1 + prior));
     }
+    if (relativeChange < 1e-8) break;
   }
   const nodes: ProfileNodeJson[] = [];
   let distance = 0, time = 0;

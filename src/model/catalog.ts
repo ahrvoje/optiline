@@ -12,7 +12,7 @@ import {
   spanDisplacement,
   spanPreimageBezier,
   tessellateLine,
-  type LineSpec,
+  type PhLineSpec,
 } from "@/renderer/ph-tessellate";
 
 type Point = [number, number];
@@ -71,8 +71,8 @@ function totalDisplacement(preimage:Float64Array):Complex{
 }
 
 /** Solve both PH closure equations with one complex anti-periodic mode. */
-function preimageFromGuide(guide:Point[]):Float64Array{
-  const scaledGuide=guide.map(([x,y]):Point=>[1.5*x,1.5*y]);
+function preimageFromGuide(guide:Point[],scale=1):Float64Array{
+  const scaledGuide=guide.map(([x,y]):Point=>[scale*x,scale*y]);
   const points=resampleClosed(roundedGuide(scaledGuide,28),128),base=new Float64Array(256);let previousAngle=0;
   for(let j=0;j<128;j++){
     const before=points[(j+127)%128]!,after=points[(j+1)%128]!,dx=after[0]-before[0],dy=after[1]-before[1],magnitude=Math.hypot(dx,dy);let angle=Math.atan2(dy,dx);
@@ -102,12 +102,16 @@ function preimageFromGuide(guide:Point[]):Float64Array{
   return result;
 }
 
-function createPresetLine(preset:Preset):LineSpec{
-  const angle=(preset.rotationDeg??0)*Math.PI/180,cos=Math.cos(angle),sin=Math.sin(angle),initial=preset.guide.map(([x,y]):Point=>{const sx=x*(preset.xScale??1),sy=y*(preset.yScale??1);return[sx*cos-sy*sin,sx*sin+sy*cos];});
-  const meanX=initial.reduce((sum,p)=>sum+p[0],0)/initial.length,meanY=initial.reduce((sum,p)=>sum+p[1],0)/initial.length;let xx=0,xy=0,yy=0;for(const p of initial){const x=p[0]-meanX,y=p[1]-meanY;xx+=x*x;xy+=x*y;yy+=y*y;}const principal=.5*Math.atan2(2*xy,xx-yy),alignCos=Math.cos(-principal),alignSin=Math.sin(-principal),transformed=initial.map(([x,y]):Point=>[x*alignCos-y*alignSin,x*alignSin+y*alignCos]);
-  let area=0;for(let i=0;i<transformed.length;i++){const a=transformed[i]!,b=transformed[(i+1)%transformed.length]!;area+=a[0]*b[1]-a[1]*b[0];}const guide=area<0?[...transformed].reverse():transformed,preimage=preimageFromGuide(guide),gates=gatesFromPreimage(preimage),points=tessellateLine({preimage,gates},.2);let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+function createGuideLine(guide:Point[],scale=1):PhLineSpec{
+  const preimage=preimageFromGuide(guide,scale),gates=gatesFromPreimage(preimage),points=tessellateLine({preimage,gates},.2);let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
   for(let i=0;i<points.length;i+=2){minX=Math.min(minX,points[i]!);maxX=Math.max(maxX,points[i]!);minY=Math.min(minY,points[i+1]!);maxY=Math.max(maxY,points[i+1]!);}
   const shiftX=-(minX+maxX)/2,shiftY=-(minY+maxY)/2;for(let i=0;i<gates.length;i+=2){gates[i]=gates[i]!+shiftX;gates[i+1]=gates[i+1]!+shiftY;}return{preimage,gates};
+}
+
+function createPresetLine(preset:Preset):PhLineSpec{
+  const angle=(preset.rotationDeg??0)*Math.PI/180,cos=Math.cos(angle),sin=Math.sin(angle),initial=preset.guide.map(([x,y]):Point=>{const sx=x*(preset.xScale??1),sy=y*(preset.yScale??1);return[sx*cos-sy*sin,sx*sin+sy*cos];});
+  const meanX=initial.reduce((sum,p)=>sum+p[0],0)/initial.length,meanY=initial.reduce((sum,p)=>sum+p[1],0)/initial.length;let xx=0,xy=0,yy=0;for(const p of initial){const x=p[0]-meanX,y=p[1]-meanY;xx+=x*x;xy+=x*y;yy+=y*y;}const principal=.5*Math.atan2(2*xy,xx-yy),alignCos=Math.cos(-principal),alignSin=Math.sin(-principal),transformed=initial.map(([x,y]):Point=>[x*alignCos-y*alignSin,x*alignSin+y*alignCos]);
+  let area=0;for(let i=0;i<transformed.length;i++){const a=transformed[i]!,b=transformed[(i+1)%transformed.length]!;area+=a[0]*b[1]-a[1]*b[0];}const guide=area<0?[...transformed].reverse():transformed;return createGuideLine(guide,1.5);
 }
 
 function quadCell(vertices:[number,number][],gateLo:number,gateHi:number,index:number):CorridorCellJson{
@@ -117,14 +121,31 @@ function quadCell(vertices:[number,number][],gateLo:number,gateHi:number,index:n
 
 function pairArray(values:Float64Array):[number,number][]{const out:[number,number][]=[];for(let i=0;i<values.length;i+=2)out.push([values[i]!,values[i+1]!]);return out;}
 
-function compilePreset(preset:Preset):CompiledTrackJson{
-  const spec=createPresetLine(preset),left:RationalOffsetSpanJson[]=exactOffsetBoundary(spec,preset.width),right:RationalOffsetSpanJson[]=exactOffsetBoundary(spec,-preset.width),cells:CorridorCellJson[]=[],microCells:number[][]=[];let length=0,kMin=Infinity,kMax=-Infinity;
+function compileLine(spec:PhLineSpec,source:TrackSourceJson,sourceSha256:string):CompiledTrackJson{
+  const leftWidth=source.leftWidthM,rightWidth=source.rightWidthM,left:RationalOffsetSpanJson[]=exactOffsetBoundary(spec,leftWidth),right:RationalOffsetSpanJson[]=exactOffsetBoundary(spec,-rightWidth),cells:CorridorCellJson[]=[],microCells:number[][]=[];let length=0,kMin=Infinity,kMax=-Infinity;
   for(let m=0;m<256;m++){
-    const p0=evaluateLineFrame(spec,m/4),p1=evaluateLineFrame(spec,(m+1)/4),c0=evaluateLineFrame(spec,(m-1)/4),c1=evaluateLineFrame(spec,(m+2)/4),cl0:[number,number]=[c0.x-c0.ty*preset.width,c0.y+c0.tx*preset.width],cl1:[number,number]=[c1.x-c1.ty*preset.width,c1.y+c1.tx*preset.width],cr0:[number,number]=[c0.x+c0.ty*preset.width,c0.y-c0.tx*preset.width],cr1:[number,number]=[c1.x+c1.ty*preset.width,c1.y-c1.tx*preset.width];
+    const p0=evaluateLineFrame(spec,m/4),p1=evaluateLineFrame(spec,(m+1)/4),c0=evaluateLineFrame(spec,(m-1)/4),c1=evaluateLineFrame(spec,(m+2)/4),cl0:[number,number]=[c0.x-c0.ty*leftWidth,c0.y+c0.tx*leftWidth],cl1:[number,number]=[c1.x-c1.ty*leftWidth,c1.y+c1.tx*leftWidth],cr0:[number,number]=[c0.x+c0.ty*rightWidth,c0.y-c0.tx*rightWidth],cr1:[number,number]=[c1.x+c1.ty*rightWidth,c1.y-c1.tx*rightWidth];
     cells.push(quadCell([cl0,cl1,cr1,cr0],(m-1)/4,(m+2)/4,m));microCells.push([m,(m+255)%256,(m+1)%256,(m+254)%256,(m+2)%256,(m+253)%256,(m+3)%256,(m+252)%256]);length+=Math.hypot(p1.x-p0.x,p1.y-p0.y);kMin=Math.min(kMin,p0.kappa);kMax=Math.max(kMax,p0.kappa);
   }
-  const source:TrackSourceJson={schemaVersion:1,id:preset.id,name:preset.name,description:preset.description,direction:"counterclockwise",centerGatesM:pairArray(spec.gates),leftWidthM:preset.width,rightWidthM:preset.width,startGate:0,tags:preset.tags,sourceVersion:1},pts=tessellateLine(spec,.25);let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;for(let i=0;i<pts.length;i+=2){minX=Math.min(minX,pts[i]!);maxX=Math.max(maxX,pts[i]!);minY=Math.min(minY,pts[i+1]!);maxY=Math.max(maxY,pts[i+1]!);}
-  return{schemaVersion:1,source,sourceSha256:preset.id.padEnd(64,"0").slice(0,64),normalization:{originX:0,originY:0,scaleH:Math.max(maxX-minX,maxY-minY)},centerPreimageControls:pairArray(spec.preimage),gatePoints:pairArray(spec.gates),lapLengthM:length,curvature:{min:kMin,max:kMax,rhoLeft:kMax>0?1/kMax:1e9,rhoRight:kMin<0?-1/kMin:1e9},leftBoundary:left,rightBoundary:right,cells,microCells,renderSeeds:Array.from({length:257},(_,i)=>i/4),compilerVersion:1,certificateReport:{maxInterpResidual:0,minPreimageSpeed:1,maxSeamResidual:0,minContainmentBound:0,maxUtilizationBound:0,speedFixedPointResidual:0,adaptiveEdgeCount:0,lapTimeDelta:0,codeVersion:1,pass:true}};
+  const pts=tessellateLine(spec,.25);let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;for(let i=0;i<pts.length;i+=2){minX=Math.min(minX,pts[i]!);maxX=Math.max(maxX,pts[i]!);minY=Math.min(minY,pts[i+1]!);maxY=Math.max(maxY,pts[i+1]!);}
+  return{schemaVersion:1,source,sourceSha256,normalization:{originX:0,originY:0,scaleH:Math.max(maxX-minX,maxY-minY)},centerPreimageControls:pairArray(spec.preimage),gatePoints:pairArray(spec.gates),lapLengthM:length,curvature:{min:kMin,max:kMax,rhoLeft:kMax>0?1/kMax:1e9,rhoRight:kMin<0?-1/kMin:1e9},leftBoundary:left,rightBoundary:right,cells,microCells,renderSeeds:Array.from({length:257},(_,i)=>i/4),compilerVersion:1,certificateReport:{maxInterpResidual:0,minPreimageSpeed:1,maxSeamResidual:0,minContainmentBound:0,maxUtilizationBound:0,speedFixedPointResidual:0,adaptiveEdgeCount:0,lapTimeDelta:0,codeVersion:1,pass:true}};
+}
+
+function compilePreset(preset:Preset):CompiledTrackJson{
+  const spec=createPresetLine(preset),source:TrackSourceJson={schemaVersion:1,id:preset.id,name:preset.name,description:preset.description,direction:"counterclockwise",centerGatesM:pairArray(spec.gates),leftWidthM:preset.width,rightWidthM:preset.width,startGate:0,tags:preset.tags,sourceVersion:1};
+  return compileLine(spec,source,preset.id.padEnd(64,"0").slice(0,64));
+}
+
+/** Compile an editable guide without mutating any canonical catalog asset. */
+export function compileEditableTrack(source:TrackSourceJson):CompiledTrackJson{
+  if(source.centerGatesM.length<8||source.centerGatesM.length>128)throw new RangeError("editable tracks require 8 to 128 guide nodes");
+  const xs=source.centerGatesM.map(point=>point[0]),ys=source.centerGatesM.map(point=>point[1]),cx=(Math.min(...xs)+Math.max(...xs))/2,cy=(Math.min(...ys)+Math.max(...ys))/2;
+  let guide:Point[]=source.centerGatesM.map(([x,y]):Point=>[x-cx,y-cy]),area=0;
+  for(let i=0;i<guide.length;i++){const a=guide[i]!,b=guide[(i+1)%guide.length]!;area+=a[0]*b[1]-a[1]*b[0];}
+  if(area<0)guide=[...guide].reverse();
+  const normalizedSource:TrackSourceJson={...source,centerGatesM:guide.map(([x,y]):Point=>[x,y])};
+  const identity=`${source.id}-${source.sourceVersion}`.replace(/[^a-zA-Z0-9]/g,"");
+  return compileLine(createGuideLine(guide),normalizedSource,identity.padEnd(64,"0").slice(0,64));
 }
 
 export const BUILT_IN_TRACKS:CompiledTrackJson[]=PRESETS.map(compilePreset);

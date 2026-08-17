@@ -39,15 +39,46 @@ double op_dynamics_utilization(const op_vehicle *veh, const op_aero *aero,
 }
 
 double op_dynamics_q_cap(const op_vehicle *veh, const op_aero *aero, double K) {
-    double c, steady, vmax2;
+    double denominator, lateral, vmax2;
     if (veh == NULL || aero == NULL || K < 0.0 || !(veh->v_max > 0.0) ||
-        !(veh->ax_plus0 > 0.0) || !(veh->ay0 > 0.0) ||
-        !(veh->ellipse_p >= 1.0)) return 0.0;
-    c = pow(pow(aero->delta / veh->ax_plus0, veh->ellipse_p) +
-            pow(K / veh->ay0, veh->ellipse_p), 1.0 / veh->ellipse_p);
-    steady = c <= aero->gamma ? INFINITY : 1.0 / (c - aero->gamma);
+        !(veh->ay0 > 0.0)) return 0.0;
+    denominator = K - veh->ay0 * aero->gamma;
+    lateral = denominator > 0.0 ? veh->ay0 / denominator : INFINITY;
     vmax2 = veh->v_max * veh->v_max;
-    return op_min(vmax2, steady);
+    return op_min(vmax2, lateral);
+}
+
+static double op_tire_remainder(const op_vehicle *veh, const op_aero *aero,
+                                double q, double kappa) {
+    double load, lateral, remaining;
+    if (veh == NULL || aero == NULL || q < 0.0 || !(veh->ay0 > 0.0) ||
+        !(veh->ellipse_p >= 1.0)) return 0.0;
+    load = 1.0 + aero->gamma * q;
+    if (!(load > 0.0)) return 0.0;
+    lateral = fabs(q * kappa) / (veh->ay0 * load);
+    if (lateral >= 1.0) return 0.0;
+    if (veh->ellipse_p == 2.0)
+        return sqrt(op_max(0.0, 1.0 - lateral * lateral));
+    remaining = 1.0 - pow(lateral, veh->ellipse_p);
+    return pow(op_max(0.0, remaining), 1.0 / veh->ellipse_p);
+}
+
+double op_dynamics_net_accel(const op_vehicle *veh, const op_aero *aero,
+                             double q, double kappa) {
+    double load;
+    if (veh == NULL || aero == NULL || q < 0.0) return -INFINITY;
+    load = 1.0 + aero->gamma * q;
+    return veh->ax_plus0 * load * op_tire_remainder(veh, aero, q, kappa) -
+           aero->delta * q;
+}
+
+double op_dynamics_net_brake(const op_vehicle *veh, const op_aero *aero,
+                             double q, double kappa) {
+    double load;
+    if (veh == NULL || aero == NULL || q < 0.0) return -INFINITY;
+    load = 1.0 + aero->gamma * q;
+    return veh->ax_minus0 * load * op_tire_remainder(veh, aero, q, kappa) +
+           aero->delta * q;
 }
 
 op_result op_dynamics_capacity(const op_vehicle *veh, const op_aero *aero,
@@ -72,19 +103,27 @@ op_result op_dynamics_capacity(const op_vehicle *veh, const op_aero *aero,
 
 static int op_forward_ok(const op_vehicle *veh, const op_aero *aero,
                          double q0, double q, double ds, double K) {
-    double gp, gm;
-    if (op_dynamics_capacity(veh, aero, q0, q, K, &gp, &gm) != OP_OK) return 0;
-    (void)gm;
-    return (q - q0) / (2.0 * ds) + aero->delta * q <= gp;
+    double midpoint = 0.5 * (q0 + q);
+    return q <= q0 + 2.0 * ds * op_dynamics_net_accel(veh, aero, midpoint, K);
 }
 
 double op_dynamics_forward_reach(const op_vehicle *veh, const op_aero *aero,
                                  double q0, double qc, double ds, double K) {
-    double lo, hi;
-    int i;
-    if (qc <= q0 || !(ds > 0.0)) return qc;
+    double lo, hi, probe_hi;
+    int i, bracket;
+    if (!(ds > 0.0) || !(qc > 0.0)) return 0.0;
     if (op_forward_ok(veh, aero, q0, qc, ds, K)) return qc;
-    lo = q0; hi = qc;
+    probe_hi = qc;
+    lo = 0.0; hi = qc;
+    bracket = 0;
+    for (i = 63; i >= 0; i--) {
+        double probe_lo = qc * (double)i / 64.0;
+        if (op_forward_ok(veh, aero, q0, probe_lo, ds, K)) {
+            lo = probe_lo; hi = probe_hi; bracket = 1; break;
+        }
+        probe_hi = probe_lo;
+    }
+    if (!bracket) return 0.0;
     for (i = 0; i < OP_REACH_BISECT_STEPS; i++) {
         double mid = 0.5 * (lo + hi);
         if (op_forward_ok(veh, aero, q0, mid, ds, K)) lo = mid; else hi = mid;
@@ -94,20 +133,27 @@ double op_dynamics_forward_reach(const op_vehicle *veh, const op_aero *aero,
 
 static int op_brake_ok(const op_vehicle *veh, const op_aero *aero,
                        double q1, double q, double ds, double K) {
-    double gp, gm, need;
-    if (op_dynamics_capacity(veh, aero, q1, q, K, &gp, &gm) != OP_OK) return 0;
-    if (aero->delta * q > gp) return 0;
-    need = (q - q1) / (2.0 * ds) - aero->delta * q1;
-    return op_max(0.0, need) <= gm;
+    double midpoint = 0.5 * (q1 + q);
+    return q <= q1 + 2.0 * ds * op_dynamics_net_brake(veh, aero, midpoint, K);
 }
 
 double op_dynamics_brake_reach(const op_vehicle *veh, const op_aero *aero,
                                double q1, double qc, double ds, double K) {
-    double lo, hi;
-    int i;
-    if (qc <= q1 || !(ds > 0.0)) return qc;
+    double lo, hi, probe_hi;
+    int i, bracket;
+    if (!(ds > 0.0) || !(qc > 0.0)) return 0.0;
     if (op_brake_ok(veh, aero, q1, qc, ds, K)) return qc;
-    lo = q1; hi = qc;
+    probe_hi = qc;
+    lo = 0.0; hi = qc;
+    bracket = 0;
+    for (i = 63; i >= 0; i--) {
+        double probe_lo = qc * (double)i / 64.0;
+        if (op_brake_ok(veh, aero, q1, probe_lo, ds, K)) {
+            lo = probe_lo; hi = probe_hi; bracket = 1; break;
+        }
+        probe_hi = probe_lo;
+    }
+    if (!bracket) return 0.0;
     for (i = 0; i < OP_REACH_BISECT_STEPS; i++) {
         double mid = 0.5 * (lo + hi);
         if (op_brake_ok(veh, aero, q1, mid, ds, K)) lo = mid; else hi = mid;
@@ -117,24 +163,21 @@ double op_dynamics_brake_reach(const op_vehicle *veh, const op_aero *aero,
 
 op_result op_dynamics_edge_feasible(const op_vehicle *veh, const op_aero *aero,
                                     double qi, double qj, double ds, double K) {
-    double ql, qh, a, gp, gm, xp, xm, tol;
+    double midpoint, a, upper, lower, tol;
     if (!(ds > 0.0) || qi < 0.0 || qj < 0.0) return OP_DYNAMIC_PROFILE_FAILED;
-    ql = op_min(qi, qj); qh = op_max(qi, qj);
-    if (op_dynamics_capacity(veh, aero, ql, qh, K, &gp, &gm) != OP_OK)
-        return OP_DYNAMIC_PROFILE_FAILED;
+    midpoint = 0.5 * (qi + qj);
     a = (qj - qi) / (2.0 * ds);
-    xp = op_max(0.0, a + aero->delta * qh);
-    xm = op_max(0.0, -a - aero->delta * ql);
-    tol = 128.0 * DBL_EPSILON * op_max(1.0, op_max(gp, gm));
-    return xp <= gp + tol && xm <= gm + tol ? OP_OK : OP_DYNAMIC_PROFILE_FAILED;
+    upper = op_dynamics_net_accel(veh, aero, midpoint, K);
+    lower = -op_dynamics_net_brake(veh, aero, midpoint, K);
+    tol = 256.0 * DBL_EPSILON * op_max(1.0, op_max(fabs(upper), fabs(lower)));
+    return a <= upper + tol && a >= lower - tol ? OP_OK : OP_DYNAMIC_PROFILE_FAILED;
 }
 
 op_result op_dynamics_solve_envelope(const op_vehicle *veh, const op_dyn_grid *grid,
                                      double q[OP_MAX_PROFILE_EDGES],
                                      double *fixed_point_residual) {
-    double next[OP_MAX_PROFILE_EDGES];
     op_aero aero;
-    double tol, residual = INFINITY;
+    double residual = INFINITY;
     int32_t n, i, iter;
     if (veh == NULL || grid == NULL || q == NULL ||
         grid->edge_count <= 0 || grid->edge_count > OP_MAX_PROFILE_EDGES)
@@ -148,21 +191,25 @@ op_result op_dynamics_solve_envelope(const op_vehicle *veh, const op_dyn_grid *g
         q[i] = op_dynamics_q_cap(veh, &aero, kn);
         if (!op_is_finite(q[i]) || q[i] < 0.0) return OP_DYNAMIC_PROFILE_FAILED;
     }
-    tol = 1e-10 * op_max(1.0, veh->v_max * veh->v_max);
     for (iter = 0; iter < OP_ENVELOPE_MAX_ITER_C99; iter++) {
         residual = 0.0;
         for (i = 0; i < n; i++) {
-            int32_t prev = (i + n - 1) % n;
             int32_t after = (i + 1) % n;
-            double f = op_dynamics_forward_reach(veh, &aero, q[prev], q[i],
-                                                  grid->ds[prev], grid->K[prev]);
-            double b = op_dynamics_brake_reach(veh, &aero, q[after], q[i],
-                                                grid->ds[i], grid->K[i]);
-            next[i] = op_min(q[i], op_min(f, b));
-            residual = op_max(residual, fabs(next[i] - q[i]));
+            double prior = q[after];
+            double reach = op_dynamics_forward_reach(veh, &aero, q[i], q[after],
+                                                       grid->ds[i], grid->K[i]);
+            q[after] = op_min(q[after], reach);
+            residual = op_max(residual, fabs(prior - q[after]) / (1.0 + prior));
         }
-        for (i = 0; i < n; i++) q[i] = next[i];
-        if (residual <= tol) break;
+        for (i = n - 1; i >= 0; i--) {
+            int32_t after = (i + 1) % n;
+            double prior = q[i];
+            double reach = op_dynamics_brake_reach(veh, &aero, q[after], q[i],
+                                                    grid->ds[i], grid->K[i]);
+            q[i] = op_min(q[i], reach);
+            residual = op_max(residual, fabs(prior - q[i]) / (1.0 + prior));
+        }
+        if (residual <= 1e-10) break;
     }
     if (fixed_point_residual != NULL) *fixed_point_residual = residual;
     if (iter == OP_ENVELOPE_MAX_ITER_C99) return OP_DYNAMIC_PROFILE_FAILED;
@@ -253,6 +300,8 @@ op_result op_dynamics_adaptive_profile(const op_track *track, const op_spline *s
                                        const op_vehicle *veh, op_profile *out,
                                        op_certificate *cert) {
     op_dyn_grid grid;
+    double q[OP_MAX_PROFILE_EDGES];
+    double residual = INFINITY;
     op_result rc;
     int32_t i;
     double max_util = 0.0;
@@ -260,9 +309,10 @@ op_result op_dynamics_adaptive_profile(const op_track *track, const op_spline *s
     if (cert == NULL) return OP_INVALID_INPUT;
     memset(cert, 0, sizeof *cert);
     rc = op_dynamics_build_grid(sp, 8, 1, &grid);
+    if (rc == OP_OK) rc = op_dynamics_solve_envelope(veh, &grid, q, &residual);
     if (rc == OP_OK) rc = op_dynamics_profile(veh, &grid, out);
     cert->adaptive_edge_count = rc == OP_OK ? out->edge_count : 0;
-    cert->speed_fixed_point_residual = 0.0;
+    cert->speed_fixed_point_residual = residual;
     cert->lap_time_delta = 0.0;
     if (rc == OP_OK) {
         for (i = 0; i < out->edge_count; i++)

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { CHART_COLORS, type ProfileNodeJson } from "@/model/contracts";
+import { CONSTRAINT_COLORS } from "@/optimizer/constraint-domain";
 import { drawProfileChart, profileTimeAtCanvasX } from "@/renderer/profile-chart";
 
 const nodes: ProfileNodeJson[] = [
@@ -17,11 +18,11 @@ function canvasAt(left = 20): HTMLCanvasElement {
 }
 
 describe("profile chart selection", () => {
-  it("maps a click to lap time after the six independent Y axes", () => {
+  it("maps a click to lap time after the five independent Y axes", () => {
     const profile = { nodes, lapTime: 10, lineLength: 600 };
-    // Plot begins at client x=464 and is 538 px wide for this test canvas.
-    expect(profileTimeAtCanvasX(canvasAt(), profile, "time", 464)).toBeCloseTo(0);
-    expect(profileTimeAtCanvasX(canvasAt(), profile, "time", 733)).toBeCloseTo(5);
+    // Plot begins at client x=392 and is 610 px wide for this test canvas.
+    expect(profileTimeAtCanvasX(canvasAt(), profile, "time", 392)).toBeCloseTo(0);
+    expect(profileTimeAtCanvasX(canvasAt(), profile, "time", 697)).toBeCloseTo(5);
     expect(profileTimeAtCanvasX(canvasAt(), profile, "time", 1002)).toBeCloseTo(10);
   });
 
@@ -33,8 +34,8 @@ describe("profile chart selection", () => {
       axisDistances: [0, 50, 400, 500],
       axisLength: 600,
     };
-    expect(profileTimeAtCanvasX(canvasAt(), profile, "distance", 733)).toBeCloseTo(4.142857);
-    expect(profileTimeAtCanvasX(canvasAt(), profile, "distance", 867.5)).toBeCloseTo(6.5);
+    expect(profileTimeAtCanvasX(canvasAt(), profile, "distance", 697)).toBeCloseTo(4.142857);
+    expect(profileTimeAtCanvasX(canvasAt(), profile, "distance", 849.5)).toBeCloseTo(6.5);
   });
 
   it("draws a dotted purple zero-curvature reference", () => {
@@ -78,5 +79,43 @@ describe("profile chart selection", () => {
       else Object.defineProperty(globalThis, "window", { configurable: true, value: priorWindow });
     }
     expect(strokes).toContainEqual({ color: CHART_COLORS.curvature, dash: [3, 5] });
+    expect(strokes.some(stroke => stroke.color === "#88919c")).toBe(false);
+  });
+
+  it("shows larger cursor values on every Y axis and paints the constraint ribbon", () => {
+    const texts: Array<{ text: string; font: string }> = [];
+    const rectangles: string[] = [];
+    const context = {
+      strokeStyle: "", fillStyle: "", lineWidth: 1, globalAlpha: 1,
+      font: "", textAlign: "left", setTransform() {}, beginPath() {}, moveTo() {}, lineTo() {},
+      save() {}, restore() {}, stroke() {}, setLineDash() {},
+      fillRect() { rectangles.push(String(this.fillStyle)); },
+      fillText(text: string) { texts.push({ text, font: String(this.font) }); },
+      measureText(text: string) { return { width: text.length * 7 }; },
+    };
+    const canvas = {
+      width: 0, height: 0,
+      getBoundingClientRect: () => ({ left: 0, width: 1000, height: 260 }),
+      getContext: () => context,
+    } as unknown as HTMLCanvasElement;
+    const priorWindow = globalThis.window;
+    Object.defineProperty(globalThis, "window", {
+      configurable: true, value: { devicePixelRatio: 1 },
+    });
+    try {
+      drawProfileChart(canvas, {
+        nodes,
+        lapTime: 10,
+        lineLength: 600,
+        limitDomains: ["speed", "speed", "none", "braking"],
+      }, [], { xAxis: "time", cursorTime: 5 });
+    } finally {
+      if (priorWindow === undefined) Reflect.deleteProperty(globalThis, "window");
+      else Object.defineProperty(globalThis, "window", { configurable: true, value: priorWindow });
+    }
+    expect(texts.filter(item => item.font.includes("16px")).length).toBe(5);
+    expect(rectangles).toContain(CONSTRAINT_COLORS.speed);
+    expect(rectangles).toContain(CONSTRAINT_COLORS.none);
+    expect(rectangles).toContain(CONSTRAINT_COLORS.braking);
   });
 });

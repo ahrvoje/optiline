@@ -158,6 +158,35 @@ export async function putImportedTrack(record: ImportedTrackRecord): Promise<voi
   await transactionDone(tx);
 }
 
+/** Replace an unsaved custom-track revision whose fingerprint changed. */
+export async function replaceImportedTrack(
+  previousFingerprint: string,
+  record: ImportedTrackRecord,
+): Promise<void> {
+  const db = await openDb();
+  const tx = db.transaction(STORE_TRACKS, "readwrite");
+  const store = tx.objectStore(STORE_TRACKS);
+  if (previousFingerprint !== record.fingerprint) store.delete(previousFingerprint);
+  store.put(record, record.fingerprint);
+  await transactionDone(tx);
+}
+
+/** Explicit custom-track deletion also removes profiles that reference it. */
+export async function deleteImportedTrack(fingerprint: string): Promise<void> {
+  const db = await openDb();
+  const tx = db.transaction([STORE_TRACKS, STORE_PROFILES], "readwrite");
+  tx.objectStore(STORE_TRACKS).delete(fingerprint);
+  const request = tx.objectStore(STORE_PROFILES).openCursor();
+  request.onsuccess = () => {
+    const cursor = request.result;
+    if (!cursor) return;
+    const profile = cursor.value as SavedProfileJson;
+    if (profile.trackFingerprint === fingerprint) cursor.delete();
+    cursor.continue();
+  };
+  await transactionDone(tx);
+}
+
 /* --------------------------------- checkpoints -------------------------------- */
 
 /** Store key is the concatenated track+settings fingerprint (§20.4). */
