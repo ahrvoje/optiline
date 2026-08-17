@@ -17,6 +17,8 @@ test("loads the catalog and keeps primary actions coherent", async ({ page }) =>
   await expect(page.locator("#setting-run-mode")).toBeVisible();
   await expect(page.locator("#setting-run-mode")).toHaveValue("random");
   await expect(page.locator("#setting-vMaxMps")).toHaveValue("330");
+  await expect(page.locator("#setting-vMaxMps")).toHaveAttribute("min", "3.6");
+  await expect(page.locator("#setting-vMaxMps")).toHaveAttribute("step", "1");
   await expect(page.locator("#setting-safetyMarginM")).toHaveCount(0);
   await expect(page.locator("#setting-vMaxMps + span")).toHaveText("km/h");
   const unitStyle = await page.locator("#setting-vMaxMps + span").evaluate(unit => ({
@@ -25,6 +27,17 @@ test("loads the catalog and keeps primary actions coherent", async ({ page }) =>
   }));
   expect(unitStyle.color).toBe("rgb(245, 247, 250)");
   expect(unitStyle.fontSizePx).toBeGreaterThanOrEqual(11);
+  await page.locator("#setting-vMaxMps").hover();
+  await page.mouse.wheel(0, -100);
+  await expect(page.locator("#setting-vMaxMps")).toHaveValue("331");
+  await page.locator("#setting-vMaxMps").fill("330");
+  await page.locator("#setting-vMaxMps").press("Tab");
+  await expect(page.locator("#engine-status")).toContainText("Certified", { timeout: 30_000 });
+  await page.locator("#setting-airDensity").hover();
+  await page.mouse.wheel(0, -100);
+  await expect(page.locator("#setting-airDensity")).toHaveValue("1.23");
+  await page.mouse.wheel(0, 100);
+  await expect(page.locator("#setting-airDensity")).toHaveValue("1.225");
   await expect(page.locator("#settings-grid .setting")).toHaveCount(13);
   await expect(page.locator("#setting-background-execution")).toHaveCount(0);
   await expect(page.locator(".chart-panel h2")).toHaveCount(0);
@@ -112,6 +125,15 @@ test("loads the catalog and keeps primary actions coherent", async ({ page }) =>
   await expect(page.locator("#optimize-button")).toBeEnabled();
   await page.locator("#optimize-button").click();
   await expect(page.locator("#optimize-button")).toHaveText("STOP");
+  await expect(page.locator("#setting-massKg")).toBeDisabled();
+  await expect(page.locator("#setting-run-mode")).toBeDisabled();
+  await expect(page.locator("#reset-button")).toBeDisabled();
+  const guardedMass = await page.locator("#setting-massKg").evaluate(input => {
+    (input as HTMLInputElement).value = "700";
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    return (input as HTMLInputElement).value;
+  });
+  expect(guardedMass).toBe("500");
   await expect(page.locator("#optimize-button")).toHaveText("STOP");
   await expect(page.locator("#work-overlay")).toContainText("OPTIMIZING");
   await expect(page.locator("#work-overlay")).toBeVisible();
@@ -154,6 +176,10 @@ test("loads the catalog and keeps primary actions coherent", async ({ page }) =>
   await expect(page.locator(".validation-progress")).toBeVisible();
   await expect(page.locator("#engine-status")).toContainText("Validating final candidates");
   await expect(page.locator("#engine-status")).toContainText("Stopped", { timeout: 30_000 });
+  await expect(page.locator("#work-overlay")).toBeHidden({ timeout: 30_000 });
+  await expect(page.locator("#setting-massKg")).toBeEnabled();
+  await expect(page.locator("#setting-run-mode")).toBeEnabled();
+  await expect(page.locator("#reset-button")).toBeEnabled();
 
   // A completed run must never poison the next worker initialization.
   await page.locator("#optimize-button").click();
