@@ -17,7 +17,7 @@ test("loads the catalog and keeps primary actions coherent", async ({ page }) =>
   await expect(page.locator("#setting-run-mode")).toBeVisible();
   await expect(page.locator("#setting-run-mode")).toHaveValue("random");
   await expect(page.locator("#setting-vMaxMps")).toHaveValue("330");
-  await expect(page.locator("#setting-safetyMarginM")).toHaveValue("0");
+  await expect(page.locator("#setting-safetyMarginM")).toHaveCount(0);
   await expect(page.locator("#setting-vMaxMps + span")).toHaveText("km/h");
   const unitStyle = await page.locator("#setting-vMaxMps + span").evaluate(unit => ({
     color: getComputedStyle(unit).color,
@@ -25,8 +25,8 @@ test("loads the catalog and keeps primary actions coherent", async ({ page }) =>
   }));
   expect(unitStyle.color).toBe("rgb(245, 247, 250)");
   expect(unitStyle.fontSizePx).toBeGreaterThanOrEqual(11);
-  await expect(page.locator("#settings-grid .setting")).toHaveCount(15);
-  await expect(page.locator("#setting-background-execution")).toHaveValue("on");
+  await expect(page.locator("#settings-grid .setting")).toHaveCount(13);
+  await expect(page.locator("#setting-background-execution")).toHaveCount(0);
   await expect(page.locator(".chart-panel h2")).toHaveCount(0);
   await expect(page.locator(".chart-axis-label")).toHaveCount(5);
   await expect(page.locator(".chart-series-label")).toHaveCount(5);
@@ -112,8 +112,6 @@ test("loads the catalog and keeps primary actions coherent", async ({ page }) =>
   await expect(page.locator("#optimize-button")).toBeEnabled();
   await page.locator("#optimize-button").click();
   await expect(page.locator("#optimize-button")).toHaveText("STOP");
-  await page.locator("#setting-background-execution").selectOption("off");
-  await page.locator("#setting-background-execution").selectOption("on");
   await expect(page.locator("#optimize-button")).toHaveText("STOP");
   await expect(page.locator("#work-overlay")).toContainText("OPTIMIZING");
   await expect(page.locator("#work-overlay")).toBeVisible();
@@ -167,7 +165,7 @@ test("loads the catalog and keeps primary actions coherent", async ({ page }) =>
 
   await page.locator("#reset-button").click();
   await expect(page.locator("#setting-massKg")).toHaveValue("900");
-  await expect(page.locator("#setting-safetyMarginM")).toHaveValue("0");
+  await expect(page.locator("#setting-safetyMarginM")).toHaveCount(0);
   await expect(page.locator("#setting-run-mode")).toHaveValue("random");
   await page.locator("#setting-massKg").hover();
   await page.mouse.wheel(0, -100);

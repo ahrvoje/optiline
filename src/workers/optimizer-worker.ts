@@ -104,16 +104,12 @@ let stopping = false;
 let running = false;
 let generation = 0;
 let candidateCountTotal = 0;
-let backgroundExecution = true;
 
 const yieldChannel = new MessageChannel();
 const yieldResolvers: Array<() => void> = [];
 yieldChannel.port1.onmessage = () => yieldResolvers.shift()?.();
 
 function yieldForHostEvents(): Promise<void> {
-  if (!backgroundExecution) {
-    return new Promise(resolve => setTimeout(resolve, 16));
-  }
   return new Promise(resolve => {
     yieldResolvers.push(resolve);
     yieldChannel.port2.postMessage(null);
@@ -1489,8 +1485,6 @@ self.addEventListener("message", (event: MessageEvent<OptimizerCommand>) => {
     });
   } else if (message.type === "stop") {
     stopping = true;
-  } else if (message.type === "setBackgroundExecution") {
-    backgroundExecution = message.enabled;
   } else if (message.type === "shutdown") {
     stopping = true;
     self.close();

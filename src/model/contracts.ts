@@ -358,7 +358,6 @@ export type OptimizerCommand = MessageEnvelope &
     | { type: "start"; seedGenotype: Float64Array | null; checkpoint: ArrayBuffer | null }
     | { type: "stop" }
     | { type: "setCandidateVisibility"; count: number }
-    | { type: "setBackgroundExecution"; enabled: boolean }
     | { type: "shutdown" }
   );
 
