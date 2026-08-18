@@ -74,7 +74,7 @@ Periodicity gives structural position closure. The quintic residual makes the di
 
 $$
 \kappa(u)=
-\frac{\operatorname{cross}(\mathbf r'(u),\mathbf r''(u))}
+\frac{\mathrm{cross}(\mathbf r'(u),\mathbf r''(u))}
 {\|\mathbf r'(u)\|^3}.
 $$
 
