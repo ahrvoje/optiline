@@ -138,6 +138,8 @@ The optimizer uses a feasibility-first, multi-fidelity search:
 6. The best discovery elite is converted to intrinsic curvature, closure-projected, reconstructed, and evaluated on successively finer meshes.
 7. The certifier worker checks closure, regularity, dynamics, continuous rectangle motion, and convergence at 2,048, 4,096, and 8,192 profile edges. Only a passing finalist can replace the displayed certified trajectory.
 
+Every optimization run has no time limit and continues until the user presses STOP. Every complete 30-second interval sends the discovery incumbent to an independent worker for canonical conversion, smoothing, closure projection, and certification while GPU search continues. Only the complete certified product is displayed. STOP freezes that displayed product, cancels unpublished presentation work, uses an atomic flag when cross-origin isolation is available, and waits only for the in-flight GPU dispatch.
+
 Candidates are ordered lexicographically rather than by a weighted penalty:
 
 $$

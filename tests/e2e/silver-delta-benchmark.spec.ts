@@ -167,16 +167,16 @@ test("benchmarks the complete Silver Delta pipeline", async ({ page }, testInfo)
   if (process.env["OPTILINE_BENCHMARK_EXPECT_INTERMEDIATE"] === "1") {
     await page.waitForFunction(() => {
       const records = (window as unknown as { __optimizerAudit: AuditRecord[] }).__optimizerAudit;
-      return records.some(record => record.type === "intermediateBest");
-    });
+      return records.some(record =>
+        record.type === "liveProductCertified" && record.certificatePass === true
+      );
+    }, undefined, { timeout: 180_000 });
     const intermediate = await page.evaluate(() =>
       (window as unknown as { __optimizerAudit: AuditRecord[] }).__optimizerAudit.findLast(
-        record => record.type === "intermediateBest",
+        record => record.type === "liveProductCertified" && record.certificatePass === true,
       )!
     );
-    expect(intermediate.profileNodeCount).toBe(512);
-    expect(intermediate.pathSampleCount).toBe(512);
-    await expect(page.locator("#engine-status")).toContainText("preview");
+    expect(intermediate.pathSampleCount).toBe(4096);
     await expect(page.locator("#lap-time")).toHaveText(`${intermediate.lapTime!.toFixed(3)} s`);
     await expect(page.locator("#line-length")).toHaveText(
       `${intermediate.lineLengthM!.toFixed(1)} m`,
@@ -215,20 +215,16 @@ test("benchmarks the complete Silver Delta pipeline", async ({ page }, testInfo)
       batchLatencyMs: record.batchLatencyMs,
       phaseLatencyMs: record.phaseLatencyMs,
     })),
-    finalists: report.records.filter(record => record.type === "provisionalBest").map(record => ({
-      candidateSpace: record.candidateSpace,
-      candidateKey: record.candidateKey,
+    finalists: report.records.filter(record => record.type === "liveProductCertified").map(record => ({
+      sequence: record.sequence,
       lapTime: record.lapTime,
+      pass: record.certificatePass,
     })),
-    intermediates: report.records.filter(record => record.type === "intermediateBest").map(
+    intermediates: report.records.filter(record => record.type === "discoverySnapshot").map(
       record => ({
         sequence: record.sequence,
         elapsedMs: record.elapsedMs,
         optimizerLapTime: record.optimizerLapTime,
-        lapTime: record.lapTime,
-        lineLengthM: record.lineLengthM,
-        profileNodeCount: record.profileNodeCount,
-        pathSampleCount: record.pathSampleCount,
       }),
     ),
     certified: report.records.filter(record =>

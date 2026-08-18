@@ -163,11 +163,12 @@ The native release flags SHALL include `/O2 /TC /std:c17 /fp:strict /W4 /WX`. Th
 
 ### 6.2 Process layout
 
-The application has three execution contexts:
+The application has four execution contexts:
 
 1. **Main thread:** DOM, controls, chart canvas, WebGPU rendering, animation clock, IndexedDB coordination.
-2. **Optimizer worker:** WebGPU adapter/device, WGSL compute pipelines, population state, candidate batches, provisional-best readback.
-3. **Certifier worker:** C99/WASM binary64 PH compilation, containment certification, high-resolution dynamics, serialization validation, and CPU fallback optimizer.
+2. **Optimizer worker:** WebGPU adapter/device, WGSL compute pipelines, population state, candidate batches, and periodic discovery snapshots.
+3. **Live-presentation worker:** lazily created after the first complete 30-second interval; binary64 discovery conversion, canonical-curvature smoothing, closure projection, nested-mesh evaluation, and independent certification.
+4. **Certifier worker:** C99/WASM binary64 PH compilation, containment certification, high-resolution dynamics, serialization validation, and CPU fallback optimizer.
 
 GPU objects are not shared between contexts. The optimizer worker SHALL send only compact certified or display candidate data to the main thread at no more than 15 updates/s. Candidate lines SHALL be sent as transferable typed arrays.
 
@@ -1742,16 +1743,29 @@ Convert a word to an open-interval uniform by
 U=(x+0.5)2^{-32}.
 \]
 
-### 13.7 Incumbent policy
+### 13.7 Incumbent publication and display invariant
 
-The GPU global best is provisional. On a provisional improvement:
+The discovery incumbent is internal search state. The application SHALL NOT display a resampled discovery path as the current trajectory.
 
-1. send genotype, seed lineage, provisional coefficients, and score to the certifier worker;
-2. rebuild from the genotype in binary64;
-3. certify PH interpolation and regularity;
-4. certify swept-rectangle containment;
-5. compute the 1024-edge periodic profile; and
-6. replace the displayed certified best only if its certified lap time is smaller.
+After each complete 30-second optimization interval, the optimizer worker SHALL send a compact snapshot of the current binary64 discovery incumbent and at most one archive alternate. It SHALL then continue search without waiting. The main thread SHALL keep at most one active live-presentation job and one newest pending snapshot. A superseded pending snapshot SHALL be discarded.
+
+The independent live-presentation worker SHALL apply, in order, the same publishable-product pipeline to every snapshot:
+
+1. rebuild the discovery basis and trajectory in binary64;
+2. fit the canonical curvature representation;
+3. apply the bounded time-preserving smoothing rule;
+4. project strict periodic closure;
+5. evaluate the 1024-, 2048-, and 4096-edge meshes;
+6. independently certify the 2048-, 4096-, and 8192-edge meshes and 16384-sample closure residual; and
+7. build the displayed 4096-sample path and 8192-edge profile from the certified canonical representation.
+
+Only a passing certified product MAY replace the displayed current trajectory, and only when its certified lap time is smaller. The optimizer worker has no message type that can publish a trajectory directly. OPTIMIZE SHALL remain disabled until the starting trajectory has a passing certificate.
+
+The following WYSIWYG invariant is mandatory:
+
+> At every instant during optimization, the displayed current trajectory is already a complete final product. If STOP is pressed at that instant, the stopped result SHALL retain the same trajectory representation, rendered path, profile, lap time, and certificate that were displayed immediately before STOP.
+
+STOP SHALL invalidate and terminate every unpublished live-presentation job before it can update the display. STOP SHALL NOT convert, smooth, project, certify, or promote a newer hidden discovery candidate. If no live product has been published in the current run, the starting certified incumbent remains the stopped result.
 
 Compare certified times with
 
@@ -1761,9 +1775,9 @@ T'<T-\max(10^{-9}\ \mathrm s,32\epsilon T).
 
 Bitwise ties choose the smaller candidate ID. A failed certification is logged and never displayed as best.
 
-### 13.8 Run duration
+### 13.8 Run lifetime
 
-There is no automatic convergence stop. OPTIMIZE runs until STOP, a fatal device error, a track/settings change, or page shutdown. The UI SHALL show elapsed time, batches, valid candidates, rejection causes, provisional best, certified best, and certified improvement history.
+Optimization has no convergence stop, deadline, or duration option. Every run SHALL continue until STOP, a fatal device error, a track/settings change, or page shutdown. The worker `start` command SHALL contain no duration or deadline field. This makes an accidental time-limited run impossible at the protocol boundary. The UI SHALL state that the run continues until STOP and SHALL show elapsed time, batches, valid candidates, rejection causes, discovery time, certified displayed time, and certified improvement history.
 
 ## 14. WebGPU compute design
 
@@ -1874,7 +1888,9 @@ The diagnostics panel SHALL report counts and percentages.
 
 ### 14.6 Batch latency and STOP
 
-The optimizer worker SHALL tune proposals per dispatch to keep measured batch wall time between 20 and 50 ms. It starts with one proposal per chain. If one dispatch exceeds 50 ms, split the chain range across multiple dispatches. STOP sets an atomic worker flag, submits no further batch, waits for the in-flight dispatch, and begins final certification.
+The optimizer worker SHALL tune proposals per dispatch to keep measured batch wall time between 20 and 50 ms. It starts with one proposal per chain. If one dispatch exceeds 50 ms, split the chain range across multiple dispatches. STOP freezes the displayed product, terminates unpublished presentation work, sets an atomic worker flag, submits no further batch, waits only for the in-flight dispatch, and writes the resumable checkpoint. It performs no post-search finalization.
+
+Each live-presentation job SHALL report monotonic progress over three bounded finalization stages and seven independent certification stages. Stage count is deterministic; elapsed time per stage is not assumed to be uniform because closure projection can require a variable number of Newton iterations. This work runs concurrently with optimization and SHALL NOT block optimizer dispatches.
 
 ### 14.7 Device loss
 
@@ -1904,7 +1920,7 @@ The renderer SHALL evaluate PH lines analytically into a GPU vertex buffer. It S
 
 The camera has two modes: `Fit all` and `Zoomed`. `Zoomed` defaults off on each page load. The camera SHALL preserve aspect ratio and SHALL NOT rotate automatically.
 
-In `Fit all`, the camera SHALL fit the complete outer boundary with 8% padding on all sides. Track selection resets the camera to `Fit all`. Starting PLAY uses the current `Zoomed` toggle value; it SHALL NOT silently change that value.
+In `Fit all`, the camera SHALL fit the complete outer boundary with 8 CSS pixels of requested horizontal padding and 8% requested vertical padding. If the opposite axis limits scale, the resulting unused space MAY be larger. Track selection resets the camera to `Fit all`. Starting PLAY uses the current `Zoomed` toggle value; it SHALL NOT silently change that value.
 
 In `Zoomed`, the camera follows one focused vehicle and centers its physical rectangle in the track viewer on every animation frame. Let the viewer's content-box dimensions in CSS pixels be \(W_c,H_c\). Let \(T=(T_x,T_y)\) be the focused vehicle's unit tangent and \(N=(-T_y,T_x)\). With a nonrotating camera, the physical \(L_v\times W_v\) rectangle has axis-aligned world extents
 
@@ -1968,7 +1984,7 @@ The primary layout targets a 1440×900 desktop and remains functional down to 10
 +----------------------+-----------------------------------------------+
 ```
 
-The left rail is 280 CSS pixels. The track view receives 52–60% of available right-side height. Settings and profile share the lower area. Below 1180 CSS pixels, settings become a collapsible drawer under the chart. Mobile is not a version-1 target.
+The left rail is 280 CSS pixels. The track view receives 52–60% of available right-side height. Settings and profile share the lower area. The configuration column SHALL be at least 430 CSS pixels while settings use a compact two-column row. Each 10 CSS pixel label SHALL read `setting name — description`, span the complete row above its value editor, and remain on one line with end ellipsis only when the row is too narrow. The equation SHALL start immediately after the fixed-width value editor and align vertically with its field, so no separate description column or reserved empty band runs through the settings list. Above that minimum, extra width SHALL favor the track view. Below 1150 CSS pixels, each setting SHALL reflow to one column, so the configuration column can contract without horizontal overflow. A settings region SHALL never show a horizontal scrollbar. Mobile is not a version-1 target.
 
 ### 16.2 Track catalog
 
@@ -2003,19 +2019,24 @@ Changing geometry or dynamics marks the current result `settings changed`. It re
 The control order is:
 
 ```text
-[ OPTIMIZE ] [ STOP ] [ PLAY / PAUSE ] [ SAVE ] [ ] Zoomed [ Focus: racer ]
+[ OPTIMIZE / STOP — full control-column width ] [ PLAY / PAUSE ] [ SAVE ] [ ] Zoomed [ Focus: racer ]
+[ Configuration                                        RESET ]
+[ vertically scrolling settings                              ]
 ```
 
-OPTIMIZE SHALL be orange. Button behavior is:
+OPTIMIZE SHALL be orange and use a larger label than secondary controls. Button behavior is:
 
-- **OPTIMIZE:** starts a new population from the current certified genotype, or the centerline if none exists. After STOP, it resumes the in-memory/checkpointed chains when track and settings fingerprints match.
-- **STOP:** requests the bounded stop in Section 14.6, certifies the best pending candidates, and preserves a resumable checkpoint.
+- **OPTIMIZE:** starts a new population from the current certified genotype, or the centerline if none exists. It always runs until STOP. After STOP, it resumes the in-memory/checkpointed chains when track and settings fingerprints match.
+- **STOP:** replaces OPTIMIZE in the same full-width position while a run is active. It SHALL blink to make the manual-stop requirement visible. It freezes the displayed certified product, cancels unpublished presentation work, atomically requests the bounded stop in Section 14.6, and preserves a resumable checkpoint. It does not change the displayed trajectory.
+- **RESET:** restores default vehicle settings and run mode, clears the elapsed optimization time to `—`, and starts baseline recertification.
 - **PLAY:** resets all selected racers to the common start and starts animation. During playback its label is PAUSE. It is disabled while optimizing or stopping.
 - **SAVE:** stores the current certified profile. It is disabled without a certified current profile or when settings have changed.
 - **Zoomed:** a toggle that may be changed before PLAY, while playing, or while paused. When active it applies the camera and focus rules in Section 15.2. It is disabled only when there is no playable participant.
 - **Focus:** identifies the racer followed by `Zoomed`. The select control lists all playback participants by profile color and name. Direct selection in the viewer or race-order list SHALL synchronize this control.
 
 A small `New run` command discards the checkpoint after confirmation and seeds all chains from the current certified line or centerline.
+
+While optimization is active, the header status SHALL remain steady. STOP SHALL be the only blinking control or notification. Validation progress remains deterministic and does not blink.
 
 ### 16.5 Status
 
@@ -2033,7 +2054,7 @@ GPU LOST
 ERROR
 ```
 
-During optimization show elapsed time, batch count, candidates evaluated, valid percentage, most frequent rejection, provisional time, certified time, and last certified improvement time. No configurations/s target or success color is attached to throughput.
+During optimization show elapsed time, batch count, the cumulative number of candidates evaluated, valid percentage, most frequent rejection, discovery time, displayed certified time, and last certified improvement time. The viewer metric strip SHALL show `CANDIDATES` as a cumulative count and SHALL NOT show proxy/s, full-laps/s, or certified/s rates. No configurations/s target or success color is attached to throughput.
 
 ## 17. Time-profile plot
 
@@ -2213,6 +2234,8 @@ Database name is `optiline`, version 1. Object stores are:
 
 SAVE is one transaction that writes the profile and updates track metadata. A failed transaction leaves no partial profile.
 
+The database is shared by every application instance on the same browser profile and exact site origin. A new instance SHALL load all compatible saved profiles and imported tracks from it. After SAVE, the application SHALL request persistent browser storage when that API is available. Different origins, ports, browser profiles, and devices do not share IndexedDB; cross-device sharing requires explicit export/import or a future server-side synchronization service.
+
 The default saved name is `<track name> — <lap time to 0.001 s> — <local date/time>`. The user may edit it before commit. Empty names and names longer than 120 Unicode scalar values are rejected.
 
 ### 20.5 Fingerprints
@@ -2226,7 +2249,7 @@ Canonical JSON uses UTF-8, sorted object keys, no insignificant whitespace, deci
 | `loading` | none | assets and workers ready |
 | `ready` | select, edit, optimize, play if profile, save if certified, toggle zoom/focus if profile | action |
 | `optimizing` | stop, inspect | STOP or error |
-| `stopping` | inspect | GPU batch ends and certification completes |
+| `stopping` | inspect | in-flight GPU batch ends and checkpoint is returned |
 | `certifying` | inspect | certificate pass/fail |
 | `playing` | pause, restart, speed change, toggle zoom, change focus | pause or track change |
 | `paused` | play, restart, select profiles, toggle zoom, change focus | action |

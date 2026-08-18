@@ -3,7 +3,6 @@ import type {
   CompiledTrackJson,
   OptimizerCommand,
   OptimizerEvent,
-  V2RepresentationsJson,
   VehicleSettings,
 } from "@/model/contracts";
 import { GRAVITY } from "@/model/contracts";
@@ -22,10 +21,7 @@ import {
 } from "@/optimizer/minimum-lap";
 import { selectFullEvaluationIndices } from "@/optimizer/surrogate-screening";
 import { selectDiverseTimeArchive } from "@/optimizer/elite-archive";
-import {
-  buildIntermediatePreview,
-  completedReportingInterval,
-} from "@/optimizer/intermediate-reporting";
+import { completedReportingInterval } from "@/optimizer/intermediate-reporting";
 import {
   buildHybridBasisTable,
   buildHybridPeriodicBasis,
@@ -40,20 +36,11 @@ import {
 } from "@/optimizer/fourier";
 import { PhiloxStream } from "@/optimizer/philox";
 import {
-  fitCurvatureRepresentation,
-  projectCurvatureClosure,
-  projectCurvaturePerturbation,
-  reconstructCurvaturePath,
-  type CurvatureRepresentation,
-} from "@/optimizer/curvature-closure";
-import { evaluateCurvatureCandidate } from "@/optimizer/curvature-evaluation";
-import {
   quadraticPatternCombinations,
   smoothPatternProposals,
 } from "@/optimizer/smooth-arc-search";
 import { minimumCurvatureSeed } from "@/optimizer/geometric-seed";
 import {
-  buildReferenceSpine,
   buildReferenceGeometryTable,
   buildSafeCorridor,
   lateralFieldGenotype,
@@ -62,10 +49,6 @@ import {
   sampleRacingLine,
   type SafeCorridor,
 } from "@/optimizer/racing-line";
-import {
-  centerlineSpec,
-  evaluateLineFrame,
-} from "@/renderer/ph-tessellate";
 import shaderSource from "./optimizer.wgsl?raw";
 
 const GPU_ISLAND_COUNT = 8;
@@ -110,9 +93,14 @@ function truthStationCount(basis: HybridPeriodicBasis): number {
 
 let command: Extract<OptimizerCommand, { type: "init" }> | null = null;
 let stopping = false;
+let stopSignal: Int32Array | null = null;
 let running = false;
 let generation = 0;
 let candidateCountTotal = 0;
+
+function stopRequested(): boolean {
+  return stopping || (stopSignal !== null && Atomics.load(stopSignal, 0) !== 0);
+}
 
 const yieldChannel = new MessageChannel();
 const yieldResolvers: Array<() => void> = [];
@@ -370,9 +358,14 @@ function scoreCpu(
   candidates: IslandCandidate[],
   stationCount: number,
   corridor: SafeCorridor,
+  shouldCancel: () => boolean,
 ): Float32Array {
   const output = new Float32Array(4 * candidates.length);
   for (let index = 0; index < candidates.length; index++) {
+    output.set([1e30, 1e30, 1e30, -1e30], 4 * index);
+  }
+  for (let index = 0; index < candidates.length; index++) {
+    if (shouldCancel()) break;
     try {
       const score = evaluateMinimumLapCandidate(
         track, vehicle, basis, candidates[index]!.coefficients, stationCount, "full", corridor,
@@ -383,9 +376,7 @@ function scoreCpu(
         score.regularizer,
         score.minClearanceM,
       ], 4 * index);
-    } catch {
-      output.set([1e30, 1e30, 1e30, -1e30], 4 * index);
-    }
+    } catch { /* The prefilled rejection remains authoritative. */ }
   }
   return output;
 }
@@ -573,372 +564,6 @@ function retainDiscoveryElite(
   elites.splice(0, elites.length, ...retained);
 }
 
-interface CurvaturePolishResult {
-  representation: CurvatureRepresentation;
-  score: ReturnType<typeof evaluateCurvatureCandidate>;
-  testedCandidates: number;
-  meshLapTimesS: [number, number, number] | null;
-  meshLapTimeDeltaS: number | null;
-}
-
-function curvaturePolish(
-  track: CompiledTrackJson,
-  vehicle: VehicleSettings,
-  lateralBasis: HybridPeriodicBasis,
-  lateralCoefficients: Float64Array<ArrayBufferLike>,
-  corridor: SafeCorridor,
-  fastFinalization = false,
-): CurvaturePolishResult {
-  const source = sampleRacingLine(
-    track, vehicle, lateralBasis, lateralCoefficients, 1024, corridor,
-  );
-  let representation: CurvatureRepresentation | null = null;
-  let score: ReturnType<typeof evaluateCurvatureCandidate> | null = null;
-  let testedCandidates = 0;
-  const failures: string[] = [];
-  const fitLevels: ReadonlyArray<readonly [number, number]> = fastFinalization
-    ? [[24, 64], [16, 48]]
-    : [[48, 256], [40, 192], [32, 128], [24, 64]];
-  for (const [fourierModes, residualControls] of fitLevels) {
-    try {
-      const fitted = fitCurvatureRepresentation(source, fourierModes, residualControls);
-      const evaluated = evaluateCurvatureCandidate(track, vehicle, fitted, 512);
-      testedCandidates++;
-      if (evaluated.feasible) {
-        representation = fitted;
-        score = evaluated;
-        break;
-      }
-      failures.push(
-        `${fourierModes}/${residualControls} fit infeasible ` +
-        `(violation ${evaluated.violation.toExponential(2)}, ` +
-        `clearance ${evaluated.minClearanceM.toFixed(4)} m, ` +
-        `progress ${evaluated.minProgress.toFixed(4)})`,
-      );
-    } catch (error) {
-      failures.push(error instanceof Error ? error.message : String(error));
-    }
-  }
-  if (representation === null || score === null) {
-    throw new Error(failures.join("; ") || "curvature conversion failed");
-  }
-  const fourierCount = fourierCoefficientCount(representation.basis.fourierModes);
-  if (representation.basis.residualControlCount > 0 && score.feasible) {
-    const smoothed = representation.coefficients.slice();
-    for (let i = 0; i < representation.basis.residualControlCount; i++) {
-      const before = fourierCount +
-        (i + representation.basis.residualControlCount - 1) % representation.basis.residualControlCount;
-      const current = fourierCount + i;
-      const after = fourierCount + (i + 1) % representation.basis.residualControlCount;
-      smoothed[current] = 0.25 * representation.coefficients[before]! +
-        0.5 * representation.coefficients[current]! +
-        0.25 * representation.coefficients[after]!;
-    }
-    const projected = projectCurvaturePerturbation(
-      representation,
-      smoothed,
-      representation.pathLengthM,
-      { tolerance: 1e-10, sampleCount: 2048 },
-    );
-    if (projected !== null) {
-      const evaluated = evaluateCurvatureCandidate(track, vehicle, projected, 512);
-      testedCandidates++;
-      const allowedTime = Math.max(1e-5 * score.lapTime, 1e-6);
-      if (evaluated.feasible && evaluated.lapTime <= score.lapTime + allowedTime &&
-          evaluated.regularizer < score.regularizer) {
-        representation = projected;
-        score = evaluated;
-      }
-    }
-  }
-  return {
-    representation,
-    score,
-    testedCandidates,
-    meshLapTimesS: null,
-    meshLapTimeDeltaS: null,
-  };
-}
-
-function diffuseCurvature(
-  source: CurvatureRepresentation,
-  strength: number,
-): Float64Array {
-  const coefficients = source.coefficients.slice();
-  const fourierCount = fourierCoefficientCount(source.basis.fourierModes);
-  for (let index = 1; index < fourierCount; index++) {
-    const harmonic = Math.ceil(index / 2);
-    const normalized = harmonic / Math.max(1, source.basis.fourierModes);
-    coefficients[index] = coefficients[index]! * Math.exp(-strength * normalized ** 4);
-  }
-  const residualCount = source.basis.residualControlCount;
-  if (residualCount > 0) {
-    const original = source.coefficients.subarray(fourierCount);
-    for (let i = 0; i < residualCount; i++) {
-      const average = 0.25 * original[(i + residualCount - 1) % residualCount]! +
-        0.5 * original[i]! +
-        0.25 * original[(i + 1) % residualCount]!;
-      coefficients[fourierCount + i] = (1 - strength) * original[i]! + strength * average;
-    }
-  }
-  return coefficients;
-}
-
-/** Direct curvature-space descent followed by §15.9 time-preserving smoothing. */
-function refineCurvaturePolish(
-  track: CompiledTrackJson,
-  vehicle: VehicleSettings,
-  input: CurvaturePolishResult,
-  fastFinalization = false,
-): CurvaturePolishResult {
-  let representation = input.representation;
-  let score = input.score;
-  let testedCandidates = input.testedCandidates;
-  const descentPasses: ReadonlyArray<readonly [number, number]> = fastFinalization
-    ? []
-    : [[0.08, 1], [0.03, 0.4]];
-  for (const [spectralStep, localScale] of descentPasses) {
-    const allProposals = smoothPatternProposals(
-      representation.coefficients,
-      representation.basis,
-      representation.pathLengthM,
-      spectralStep,
-      Infinity,
-      localScale,
-    );
-    const spectralCount = 2 * fourierCoefficientCount(representation.basis.fourierModes);
-    const proposals = allProposals.slice(0, Math.min(34, spectralCount));
-    const local = allProposals.slice(spectralCount);
-    const localCount = Math.min(16, local.length);
-    for (let i = 0; i < localCount; i++) {
-      proposals.push(local[Math.floor(i * local.length / localCount)]!);
-    }
-    const ranked: Array<{
-      representation: CurvatureRepresentation;
-      score: ReturnType<typeof evaluateCurvatureCandidate>;
-    }> = [];
-    for (const coefficients of proposals) {
-      const projected = projectCurvaturePerturbation(
-        representation,
-        coefficients,
-        representation.pathLengthM,
-        { tolerance: 1e-8, sampleCount: 256 },
-      );
-      if (projected === null) continue;
-      const evaluated = evaluateCurvatureCandidate(track, vehicle, projected, 128);
-      testedCandidates++;
-      if (evaluated.feasible) ranked.push({ representation: projected, score: evaluated });
-    }
-    ranked.sort((a, b) => compareFeasibleFirst(a.score, b.score, 0));
-    for (const candidate of ranked.slice(0, 2)) {
-      const evaluated = evaluateCurvatureCandidate(
-        track, vehicle, candidate.representation, 512,
-      );
-      testedCandidates++;
-      if (compareFeasibleFirst(evaluated, score, 0) < 0) {
-        representation = candidate.representation;
-        score = evaluated;
-      }
-    }
-  }
-
-  const fastestLapTime = score.lapTime;
-  const timeLimit = fastestLapTime * (1 + 1e-4);
-  let smoothRepresentation = representation;
-  let smoothScore = score;
-  for (const strength of [0.02, 0.04, 0.08, 0.16, 0.32, 0.5, 0.75, 1]) {
-    const projected = projectCurvaturePerturbation(
-      representation,
-      diffuseCurvature(representation, strength),
-      representation.pathLengthM,
-      { tolerance: 1e-10, sampleCount: 2048 },
-    );
-    if (projected === null) continue;
-    const evaluated = evaluateCurvatureCandidate(track, vehicle, projected, 512);
-    testedCandidates++;
-    if (evaluated.feasible && evaluated.lapTime <= timeLimit &&
-        evaluated.regularizer < smoothScore.regularizer) {
-      smoothRepresentation = projected;
-      smoothScore = evaluated;
-    }
-  }
-  representation = smoothRepresentation;
-  score = smoothScore;
-
-  const closureCertified = projectCurvatureClosure(representation, {
-    tolerance: 1e-11,
-    sampleCount: 4096,
-    maximumIterations: 24,
-    selectCorrectionModes: false,
-  });
-  if (closureCertified !== null) representation = closureCertified;
-  const coarse = evaluateCurvatureCandidate(track, vehicle, representation, 1024);
-  const refined = evaluateCurvatureCandidate(track, vehicle, representation, 2048);
-  const finest = evaluateCurvatureCandidate(track, vehicle, representation, 4096);
-  testedCandidates += 3;
-  const allFeasible = coarse.feasible && refined.feasible && finest.feasible;
-  return {
-    representation,
-    score: allFeasible ? finest : score,
-    testedCandidates,
-    meshLapTimesS: allFeasible ? [coarse.lapTime, refined.lapTime, finest.lapTime] : null,
-    meshLapTimeDeltaS: allFeasible ? Math.abs(finest.lapTime - refined.lapTime) : null,
-  };
-}
-
-function curvatureGenotype(
-  track: CompiledTrackJson,
-  representation: CurvatureRepresentation,
-): Float64Array {
-  const path = reconstructCurvaturePath(representation, 2048);
-  const center = centerlineSpec(track);
-  const genotype = new Float64Array(64);
-  for (let gate = 0; gate < 64; gate++) {
-    const reference = evaluateLineFrame(center, gate);
-    let nearest = path[0]!;
-    let nearestSquared = Infinity;
-    for (const sample of path) {
-      const squared = (sample.x - reference.x) ** 2 + (sample.y - reference.y) ** 2;
-      if (squared < nearestSquared) {
-        nearestSquared = squared;
-        nearest = sample;
-      }
-    }
-    genotype[gate] = (nearest.x - reference.x) * -reference.ty +
-      (nearest.y - reference.y) * reference.tx;
-  }
-  return genotype;
-}
-
-function v2Representations(
-  track: CompiledTrackJson,
-  vehicle: VehicleSettings,
-  corridor: ReturnType<typeof buildSafeCorridor>,
-  lateralBasis: HybridPeriodicBasis,
-  lateralCoefficients: Float64Array<ArrayBufferLike>,
-  curvature: CurvaturePolishResult,
-): V2RepresentationsJson {
-  const lateralFourierCount = fourierCoefficientCount(lateralBasis.fourierModes);
-  const curvatureFourierCount = fourierCoefficientCount(
-    curvature.representation.basis.fourierModes,
-  );
-  const score = curvature.score;
-  let minimumSpeedMps = Infinity;
-  let maximumSpeedMps = 0;
-  let maximumAccelerationMps2 = 0;
-  let maximumBrakingMps2 = 0;
-  let maximumLateralAccelerationMps2 = 0;
-  let maximumSuperellipseUtilization = 0;
-  let maximumDragAccelerationMps2 = 0;
-  let maximumDownforceMultiplier = 1;
-  if (score.speedSquared !== null) {
-    const distance = score.lapLengthM / score.speedSquared.length;
-    const drag = vehicle.airDensity * vehicle.dragAreaM2 / (2 * vehicle.massKg);
-    const downforce = vehicle.airDensity * vehicle.downforceAreaM2 /
-      (2 * vehicle.massKg * GRAVITY);
-    for (let i = 0; i < score.speedSquared.length; i++) {
-      const next = (i + 1) % score.speedSquared.length;
-      const q = score.speedSquared[i]!;
-      const speed = Math.sqrt(q);
-      const acceleration = (score.speedSquared[next]! - q) / (2 * distance);
-      const load = 1 + downforce * q;
-      const dragAcceleration = drag * q;
-      const lateralAcceleration = Math.abs(q * score.frames[i]!.kappa);
-      const tireAcceleration = acceleration >= 0
-        ? acceleration + dragAcceleration
-        : Math.max(0, -acceleration - dragAcceleration);
-      const longitudinalCapacity = (acceleration >= 0 ? vehicle.axPlus0 : vehicle.axMinus0) * load;
-      const utilization = (tireAcceleration / longitudinalCapacity) ** vehicle.ellipseP +
-        (lateralAcceleration / (vehicle.ay0 * load)) ** vehicle.ellipseP;
-      minimumSpeedMps = Math.min(minimumSpeedMps, speed);
-      maximumSpeedMps = Math.max(maximumSpeedMps, speed);
-      maximumAccelerationMps2 = Math.max(maximumAccelerationMps2, acceleration);
-      maximumBrakingMps2 = Math.max(maximumBrakingMps2, -acceleration);
-      maximumLateralAccelerationMps2 = Math.max(
-        maximumLateralAccelerationMps2,
-        lateralAcceleration,
-      );
-      maximumSuperellipseUtilization = Math.max(maximumSuperellipseUtilization, utilization);
-      maximumDragAccelerationMps2 = Math.max(maximumDragAccelerationMps2, dragAcceleration);
-      maximumDownforceMultiplier = Math.max(maximumDownforceMultiplier, load);
-    }
-  }
-  if (!Number.isFinite(minimumSpeedMps)) minimumSpeedMps = 0;
-  return {
-    discovery: {
-      schemaVersion: 2,
-      kernelChartId: `${track.sourceSha256}:fourier-kernel`,
-      kernelModeCount: buildReferenceSpine(track).modeCount,
-      lateralFourierModes: lateralBasis.fourierModes,
-      lateralFourierCoefficients: Array.from(lateralCoefficients.slice(0, lateralFourierCount)),
-      residualControlCount: lateralBasis.residualControlCount,
-      residualCoefficients: Array.from(lateralCoefficients.slice(lateralFourierCount)),
-      corridor: {
-        lowerM: corridor.lower,
-        upperM: corridor.upper,
-        betaSafeRad: corridor.betaSafeRad,
-      },
-    },
-    curvature: {
-      schemaVersion: 2,
-      pathLengthM: curvature.representation.pathLengthM,
-      winding: curvature.representation.winding,
-      fourierModes: curvature.representation.basis.fourierModes,
-      fourierCoefficients: Array.from(
-        curvature.representation.coefficients.slice(0, curvatureFourierCount),
-      ),
-      residualControlCount: curvature.representation.basis.residualControlCount,
-      residualCoefficients: Array.from(
-        curvature.representation.coefficients.slice(curvatureFourierCount),
-      ),
-      closureModes: curvature.representation.correctionModes.map(mode => ({ ...mode })),
-      closureCoefficients: Array.from(curvature.representation.correctionCoefficients),
-      rigidTransform: {
-        rotationRad: curvature.representation.rotationRad,
-        translationM: [...curvature.representation.translation],
-      },
-      seamPhase: curvature.representation.seamPhase,
-      closureResiduals: { ...curvature.representation.closureResiduals },
-    },
-    optimality: {
-      closure: { ...curvature.representation.closureResiduals },
-      geometry: {
-        lengthM: score.lapLengthM,
-        maxAbsCurvature: score.maxAbsCurvature,
-        maxAbsCurvatureL: score.maxAbsCurvatureL,
-        maxAbsCurvatureLL: score.maxAbsCurvatureLL,
-        minPathMetric: score.minPathMetric,
-        minProgress: score.minProgress,
-      },
-      rectangle: {
-        minimumClearanceM: score.minClearanceM,
-        continuouslyBounded: score.minClearanceM >= 0,
-      },
-      dynamics: {
-        minimumSpeedMps,
-        maximumSpeedMps,
-        maximumAccelerationMps2,
-        maximumBrakingMps2,
-        maximumLateralAccelerationMps2,
-        maximumSuperellipseUtilization,
-        maximumDragAccelerationMps2,
-        maximumDownforceMultiplier,
-        speedOptimalityResidual: score.speedOptimalityResidual,
-        maxLateralJerk: score.maxLateralJerk,
-        rmsLateralJerk: score.rmsLateralJerk,
-      },
-      convergence: {
-        meshLapTimesS: curvature.meshLapTimesS,
-        meshLapTimeDeltaS: curvature.meshLapTimeDeltaS,
-        bestTestedDescentS: null,
-        fourierExtensionImprovementS: null,
-        splineRefinementImprovementS: null,
-        curvatureRefinementImprovementS: null,
-      },
-    },
-  };
-}
-
 async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise<void> {
   if (!command || running) return;
   running = true;
@@ -1049,7 +674,7 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
   let stationEvaluations = 0;
   let lastReportedInterval = 0;
 
-  while (!stopping) {
+  while (!stopRequested()) {
     const batchStarted = performance.now();
     let phaseStarted = batchStarted;
     let generateMs = 0;
@@ -1076,7 +701,7 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
     phaseStarted = performance.now();
     const packed = gpu
       ? await scoreGpu(gpu, generated)
-      : scoreCpu(track, vehicle, basisModel, generated, stationCount, corridor);
+      : scoreCpu(track, vehicle, basisModel, generated, stationCount, corridor, stopRequested);
     gpuProxyMs = performance.now() - phaseStarted;
     phaseStarted = performance.now();
     const observations = proxyObservations(generated, packed);
@@ -1089,6 +714,7 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
       generation,
       atFinestLevel ? 1 : FULL_RECHECKS_PER_ISLAND,
     )) {
+      if (stopRequested()) break;
       const observation = observations[index]!;
       try {
         let candidateCoefficients = observation.candidate.coefficients;
@@ -1143,7 +769,7 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
     search.update(observations, 1e-5);
 
     const patternInterval = atFinestLevel ? 2 : 8;
-    if (basisModel.residualControlCount > 0 && generation > 0 &&
+    if (!stopRequested() && basisModel.residualControlCount > 0 && generation > 0 &&
         generation % patternInterval === 0 && globalScore.feasible) {
       const physicalScale = track.lapLengthM /
         Math.max(1, basisModel.residualControlCount || 1);
@@ -1166,7 +792,7 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
       }));
       const trialPacked = gpu
         ? await scoreGpu(gpu, trials)
-        : scoreCpu(track, vehicle, basisModel, trials, stationCount, corridor);
+        : scoreCpu(track, vehicle, basisModel, trials, stationCount, corridor, stopRequested);
       const trialObservations = proxyObservations(trials, trialPacked);
       proxyCandidates += trials.length;
       candidateCountTotal += trials.length;
@@ -1191,6 +817,7 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
       ];
       let patternImproved = false;
       for (const coefficients of fullTrialCoefficients) {
+        if (stopRequested()) break;
         try {
           const evaluated = evaluateMinimumLapCandidate(
             track,
@@ -1235,20 +862,38 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
     phaseStarted = performance.now();
 
     generation++;
+    if (stopRequested()) break;
     const elapsedMs = performance.now() - started;
     const reportingInterval = completedReportingInterval(elapsedMs);
     if (reportingInterval > lastReportedInterval && globalEvaluation?.feasible &&
         globalEvaluation.speedSquared !== null) {
-      const preview = buildIntermediatePreview(globalEvaluation, vehicle);
+      const sources = [
+        globalCoefficients,
+        ...discoveryElites.slice(0, CURVATURE_SOURCE_COUNT).map(elite => elite.coefficients),
+      ].filter((source, index, all) => all.findIndex(other => {
+        if (other.length !== source.length) return false;
+        for (let i = 0; i < source.length; i++) {
+          if (Math.abs(other[i]! - source[i]!) > 1e-12) return false;
+        }
+        return true;
+      }) === index).map(source => source.slice());
       send({
-        type: "intermediateBest",
+        type: "discoverySnapshot",
         sequence: reportingInterval,
         elapsedMs,
-        optimizerLapTime: preview.optimizerLapTime,
-        lapTime: preview.lapTime,
-        lineLengthM: preview.lineLengthM,
-        pathSamples: preview.pathSamples,
-        profileNodes: preview.profileNodes,
+        optimizerLapTime: globalEvaluation.lapTime,
+        candidateId: candidateCountTotal,
+        basis: {
+          fourierModes: basisModel.fourierModes,
+          residualControlCount: basisModel.residualControlCount,
+        },
+        corridor: {
+          lower: corridor.lower,
+          upper: corridor.upper,
+          betaSafeRad: corridor.betaSafeRad,
+          fallback: corridor.fallback,
+        },
+        sources,
       });
       lastReportedInterval = reportingInterval;
     }
@@ -1292,7 +937,7 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
       },
     });
 
-    if (!stopping && generation % GENERATIONS_PER_LEVEL === 0 && !atFinestLevel) {
+    if (!stopRequested() && generation % GENERATIONS_PER_LEVEL === 0 && !atFinestLevel) {
       const priorBasis = basisModel;
       const priorCorridor = corridor;
       if (!spectralComplete) {
@@ -1399,103 +1044,6 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
     await yieldForHostEvents();
   }
 
-  let curvatureCandidates = 0;
-  if (globalScore.feasible) {
-    retainDiscoveryElite(
-      discoveryElites,
-      globalCoefficients,
-      globalScore,
-      lateralFieldGenotype(track, vehicle, basisModel, globalCoefficients, corridor),
-    );
-    const curvatureStarted = performance.now();
-    let curvature: CurvaturePolishResult | null = null;
-    let curvatureSource: Float64Array | null = null;
-    const conversionErrors: string[] = [];
-    const conversionSources = [
-      globalCoefficients,
-      ...discoveryElites.slice(0, CURVATURE_SOURCE_COUNT).map(elite => elite.coefficients),
-    ].filter((source, index, all) => all.findIndex(other => {
-      if (other.length !== source.length) return false;
-      for (let i = 0; i < source.length; i++) {
-        if (Math.abs(other[i]! - source[i]!) > 1e-12) return false;
-      }
-      return true;
-    }) === index);
-    const fastFinalization = generation < 64;
-    for (const source of conversionSources) {
-      try {
-        const converted = curvaturePolish(
-          track, vehicle, basisModel, source, corridor, fastFinalization,
-        );
-        curvatureCandidates += converted.testedCandidates;
-        if (!converted.score.feasible) {
-          conversionErrors.push("projected curvature path is infeasible");
-          continue;
-        }
-        if (curvature === null || compareFeasibleFirst(converted.score, curvature.score, 0) < 0) {
-          curvature = converted;
-          curvatureSource = source;
-        }
-      } catch (error) {
-        conversionErrors.push(error instanceof Error ? error.message : String(error));
-      }
-    }
-    if (curvature !== null) {
-      const priorTested = curvature.testedCandidates;
-      curvature = refineCurvaturePolish(track, vehicle, curvature, fastFinalization);
-      curvatureCandidates += curvature.testedCandidates - priorTested;
-    }
-    const curvatureSeconds = Math.max((performance.now() - curvatureStarted) / 1000, 1e-9);
-    const elapsedSeconds = Math.max((performance.now() - started) / 1000, 1e-9);
-    send({
-      type: "progress",
-      elapsedMs: performance.now() - started,
-      batches: generation,
-      candidates: candidateCountTotal + curvatureCandidates,
-      validPercent: curvature?.score.feasible ? 100 : 0,
-      rejectionCounts: [curvature?.score.feasible ? 1 : 0, 0, 0, 0, 0, 0, 0, 0,
-        curvature?.score.feasible ? 0 : 1, 0, 0, 0, 0],
-      provisionalLapTime: curvature?.score.feasible ? curvature.score.lapTime : globalScore.lapTime,
-      batchLatencyMs: {
-        median: curvatureSeconds * 1000,
-        p95: curvatureSeconds * 1000,
-        worst: curvatureSeconds * 1000,
-      },
-      phaseLatencyMs: {
-        generate: 0,
-        gpuProxy: 0,
-        cpuTruth: 0,
-        patternSearch: 0,
-        canonicalization: curvatureSeconds * 1000,
-        bookkeeping: 0,
-      },
-      stage: "curvature",
-      throughput: {
-        stationPerSecond: stationEvaluations / elapsedSeconds,
-        proxyPerSecond: proxyCandidates / elapsedSeconds,
-        fullPerSecond: fullCandidates / elapsedSeconds,
-        curvaturePerSecond: curvatureCandidates / curvatureSeconds,
-        certifiedPerSecond: 0,
-      },
-    });
-    if (curvature !== null && curvatureSource !== null) {
-      send({
-        type: "provisionalBest",
-        candidateSpace: "curvature",
-        candidateKey: "curvature-refined",
-        lapTime: curvature.score.lapTime,
-        genotype: curvatureGenotype(track, curvature.representation),
-        candidateId: candidateCountTotal + curvatureCandidates,
-        representations: v2Representations(
-          track, vehicle, corridor, basisModel, curvatureSource, curvature,
-        ),
-      });
-    } else {
-      const reason = conversionErrors.find(message => message.trim().length > 0) ??
-        "no curvature elite passed closure and geometry checks";
-      send({ type: "warning", stage: "curvature", message: reason });
-    }
-  }
   if (gpu !== null) destroyGpuResolution(gpu);
   send({
     type: "stopped",
@@ -1508,6 +1056,7 @@ self.addEventListener("message", (event: MessageEvent<OptimizerCommand>) => {
   const message = event.data;
   if (message.type === "init") {
     command = message;
+    stopSignal = message.stopSignal === null ? null : new Int32Array(message.stopSignal);
     generation = 0;
     candidateCountTotal = 0;
     send({ type: "ready", adapterInfo: "initializing", cpuFallback: false });

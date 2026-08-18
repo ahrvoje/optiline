@@ -14,8 +14,10 @@ test("loads the catalog and keeps primary actions coherent", async ({ page }) =>
   await expect(play).toBeEnabled();
   await expect(save).toBeDisabled();
   await expect(page.locator("#optimize-button")).toBeEnabled();
+  await expect(page.locator("#optimize-button")).toHaveText("OPTIMIZE");
   await expect(page.locator("#setting-run-mode")).toBeVisible();
   await expect(page.locator("#setting-run-mode")).toHaveValue("random");
+  await expect(page.locator("#run-duration-select")).toHaveCount(0);
   await expect(page.locator("#setting-vMaxMps")).toHaveValue("330");
   await expect(page.locator("#setting-vMaxMps")).toHaveAttribute("min", "3.6");
   await expect(page.locator("#setting-vMaxMps")).toHaveAttribute("step", "1");
@@ -52,19 +54,16 @@ test("loads the catalog and keeps primary actions coherent", async ({ page }) =>
   expect(chartGeometry.canvasHeight).toBeGreaterThan(250);
   const settingLayout = await page.locator("#settings-grid .setting").first().evaluate(row => {
     const equation = row.querySelector<HTMLElement>(".setting-equation")!;
-    const description = row.querySelector<HTMLElement>(".setting-description")!;
-    const equationBox = equation.getBoundingClientRect();
-    const descriptionBox = description.getBoundingClientRect();
+    const comment = row.querySelector<HTMLElement>(".setting-comment")!;
     return {
       equationFontPx: Number.parseFloat(getComputedStyle(equation.querySelector(".formula")!).fontSize),
-      descriptionFontPx: Number.parseFloat(getComputedStyle(description).fontSize),
-      equationRight: equationBox.right,
-      descriptionLeft: descriptionBox.left,
+      commentFontPx: Number.parseFloat(getComputedStyle(comment).fontSize),
+      commentStartsWithDash: comment.textContent?.startsWith(" — ") ?? false,
     };
   });
   expect(settingLayout.equationFontPx).toBeGreaterThanOrEqual(16);
-  expect(settingLayout.descriptionFontPx).toBeGreaterThanOrEqual(11);
-  expect(settingLayout.descriptionLeft).toBeGreaterThan(settingLayout.equationRight);
+  expect(settingLayout.commentFontPx).toBeGreaterThanOrEqual(9);
+  expect(settingLayout.commentStartsWithDash).toBe(true);
   const constraintBars = await page.locator("#settings-grid").evaluate(grid => {
     const row = (id: string) => grid.querySelector<HTMLInputElement>(`#${id}`)!
       .closest<HTMLElement>(".setting")!;
@@ -106,11 +105,11 @@ test("loads the catalog and keeps primary actions coherent", async ({ page }) =>
   }));
   expect(formulaRows.every(row => row.whiteSpace === "nowrap" && row.fitsColumn)).toBe(true);
   const brakingDescriptionLines = await page.locator("#setting-axMinus0").evaluate(input => {
-    const description = input.closest(".setting")!.querySelector<HTMLElement>(".setting-description")!;
+    const description = input.closest(".setting")!.querySelector<HTMLElement>(".setting-comment")!;
     const style = getComputedStyle(description);
     return description.getBoundingClientRect().height / Number.parseFloat(style.lineHeight);
   });
-  expect(brakingDescriptionLines).toBeGreaterThan(1.5);
+  expect(brakingDescriptionLines).toBeLessThanOrEqual(1.1);
   await page.locator("#setting-run-mode").selectOption("deterministic");
   await expect(page.locator("#setting-run-mode")).toHaveValue("deterministic");
 
@@ -162,31 +161,37 @@ test("loads the catalog and keeps primary actions coherent", async ({ page }) =>
       fontSize: Number.parseFloat(labelStyle.fontSize),
       fontWeight: Number(labelStyle.fontWeight),
       animationName: labelStyle.animationName,
+      stopAnimationName: getComputedStyle(
+        document.querySelector("#optimize-button")!,
+      ).animationName,
     };
   });
   expect(runningNotice.containedByTopbar).toBe(true);
   expect(runningNotice.fontSize).toBeGreaterThanOrEqual(16);
   expect(runningNotice.fontWeight).toBeGreaterThanOrEqual(800);
-  expect(runningNotice.animationName).toContain("work-blink");
+  expect(runningNotice.animationName).toBe("none");
+  expect(runningNotice.stopAnimationName).toContain("stop-blink");
   await expect(play).toBeEnabled();
   // Wait for one complete GPU/CPU island generation. This validates the
   // optimizer shader and its storage-buffer contract, not only worker startup.
-  await expect(page.locator("#candidate-rate")).not.toHaveText("—", { timeout: 30_000 });
+  await expect(page.locator("#candidate-count")).not.toHaveText("0", { timeout: 30_000 });
   await expect(page.locator("#station-rate")).not.toHaveText("—");
-  await expect(page.locator("#full-rate")).not.toHaveText("—");
   await expect(page.locator("#engine-status")).toContainText("GPU");
   await expect(page.locator("#optimization-time")).not.toHaveText("—");
   const candidatesBeforeBackground = Number(
-    await page.locator("#candidate-rate").getAttribute("data-total-candidates"),
+    await page.locator("#candidate-count").getAttribute("data-total-candidates"),
   );
   const foreground = await page.context().newPage();
   await foreground.goto("about:blank");
   await foreground.bringToFront();
   await expect.poll(async () => Number(
-    await page.locator("#candidate-rate").getAttribute("data-total-candidates"),
+    await page.locator("#candidate-count").getAttribute("data-total-candidates"),
   ), { timeout: 15_000 }).toBeGreaterThan(candidatesBeforeBackground);
   await foreground.close();
   await page.bringToFront();
+  await expect(page.locator("#engine-status")).toContainText("certified live", {
+    timeout: 180_000,
+  });
   const stoppedUi = await page.locator("#optimize-button").evaluate(button => {
     (button as HTMLButtonElement).click();
     const overlay = document.querySelector<HTMLElement>("#work-overlay")!;
@@ -196,22 +201,13 @@ test("loads the catalog and keeps primary actions coherent", async ({ page }) =>
       validating: overlay.classList.contains("validating"),
     };
   });
-  expect(stoppedUi).toEqual({ hidden: false, text: "VALIDATING", validating: true });
-  await expect(page.locator(".validation-progress")).toBeVisible();
-  const validationGeometry = await page.locator("#work-overlay").evaluate(notice => {
-    const label = notice.querySelector("span")!.getBoundingClientRect();
-    const progress = notice.querySelector(".validation-progress")!.getBoundingClientRect();
-    const container = notice.getBoundingClientRect();
-    return {
-      progressBelowLabel: progress.top >= label.bottom,
-      progressInsideNotice: progress.bottom <= container.bottom,
-    };
-  });
-  expect(validationGeometry).toEqual({
-    progressBelowLabel: true,
-    progressInsideNotice: true,
-  });
-  await expect(page.locator("#engine-status")).toContainText("Validating final candidates");
+  expect(stoppedUi.hidden).toBe(false);
+  expect(stoppedUi.validating).toBe(false);
+  expect(stoppedUi.text).toBe("STOPPING");
+  await expect(page.locator(".validation-progress")).toBeHidden();
+  await expect(page.locator("#engine-status")).toContainText(
+    "retaining displayed certified trajectory",
+  );
   await expect(page.locator("#engine-status")).toContainText("Stopped", { timeout: 30_000 });
   await expect(page.locator("#work-overlay")).toBeHidden({ timeout: 90_000 });
   await expect(page.locator("#setting-massKg")).toBeEnabled();
@@ -239,6 +235,7 @@ test("loads the catalog and keeps primary actions coherent", async ({ page }) =>
 
   await page.locator("#reset-button").click();
   await expect(page.locator("#setting-massKg")).toHaveValue("900");
+  await expect(page.locator("#optimization-time")).toHaveText("—");
   await expect(page.locator("#setting-safetyMarginM")).toHaveCount(0);
   await expect(page.locator("#setting-run-mode")).toHaveValue("random");
   await page.locator("#setting-massKg").hover();

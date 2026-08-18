@@ -50,14 +50,15 @@ export function applyAffine(m: Affine2x3, x: number, y: number): [number, number
   return [m[0] * x + m[1] * y + m[2], m[3] * x + m[4] * y + m[5]];
 }
 
-const FIT_PADDING = 0.08; // 8% padding on all sides (§15.2)
+const FIT_VERTICAL_PADDING = 0.08;
+const FIT_HORIZONTAL_PADDING_PX = 8;
 
-/** `Fit all`: complete outer-boundary bounding box with 8% padding. */
+/** `Fit all`: complete outer boundary with compact horizontal gutters. */
 export function fitAllCamera(bounds: WorldBounds, viewportW: number, viewportH: number): CameraState {
   const bw = Math.max(bounds.maxX - bounds.minX, 1e-9);
   const bh = Math.max(bounds.maxY - bounds.minY, 1e-9);
-  const usableW = viewportW * (1 - 2 * FIT_PADDING);
-  const usableH = viewportH * (1 - 2 * FIT_PADDING);
+  const usableW = Math.max(1, viewportW - 2 * FIT_HORIZONTAL_PADDING_PX);
+  const usableH = viewportH * (1 - 2 * FIT_VERTICAL_PADDING);
   const scale = Math.min(usableW / bw, usableH / bh);
   return {
     centerX: (bounds.minX + bounds.maxX) / 2,

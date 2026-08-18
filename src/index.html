@@ -8,7 +8,7 @@
       <div class="run-status">
         <div id="work-overlay" class="work-overlay" role="status" aria-live="polite" hidden>
           <span>OPTIMIZING</span>
-          <div class="validation-progress" role="progressbar" aria-label="Validation in progress"><i></i></div>
+          <div class="validation-progress" role="progressbar" aria-label="Validation in progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div>
         </div>
         <span id="engine-dot" class="status-dot"></span><span id="engine-status">Preparing PH catalog</span>
       </div>
@@ -27,13 +27,15 @@
         <div class="viewer-overlay top-left"><span id="track-name">—</span><small id="track-meta">—</small></div>
         <div class="viewer-overlay top-right"><label for="focus-select">FOCUS</label><select id="focus-select"><option value="current">Current line</option></select></div>
         <div class="viewer-overlay bottom-left viewer-footer">
-          <div class="metrics"><div><b id="lap-time">—</b><small>LAP TIME</small></div><div><b id="line-length">—</b><small>LINE LENGTH</small></div><div><b id="station-rate">—</b><small>STATIONS/S</small></div><div><b id="candidate-rate">—</b><small>PROXIES/S</small></div><div><b id="full-rate">—</b><small>FULL LAPS/S</small></div><div><b id="certified-rate">—</b><small>CERTIFIED/S</small></div><div><b id="optimization-time">—</b><small>OPT TIME</small></div></div>
+          <div class="metrics"><div><b id="lap-time">—</b><small>LAP TIME</small></div><div><b id="line-length">—</b><small>LINE LENGTH</small></div><div><b id="station-rate">—</b><small>STATIONS/S</small></div><div><b id="candidate-count">—</b><small>CANDIDATES</small></div><div><b id="optimization-time">—</b><small>OPT TIME</small></div></div>
         </div>
       </section>
       <section class="control-panel">
-        <div class="control-head"><div><h1>Optimization setup</h1><p>Hard feasibility ranks first; lap time is the primary feasible objective.</p></div><div class="run-buttons"><button id="reset-button" class="button reset">RESET</button><button id="optimize-button" class="button optimize">OPTIMIZE</button></div></div>
-        <div id="settings-grid" class="settings-grid"></div>
-        <div class="optimizer-note"><strong>V2 Fourier backbone + high-pass quintic residual</strong><span>A tanh decoder preserves the robust rectangle corridor. Spectral continuation discovers global features, exact knot insertion adds local resolution, and closure-projected intrinsic curvature refinement finishes the line. A periodic implicit-midpoint speed solve reranks GPU proxy elites before binary64 containment certification.</span></div>
+        <div class="optimization-control"><button id="optimize-button" class="button optimize">OPTIMIZE</button></div>
+        <div class="configuration-head"><h1>Configuration</h1><button id="reset-button" class="button reset">RESET</button></div>
+        <div class="configuration-scroll">
+          <div id="settings-grid" class="settings-grid"></div>
+        </div>
       </section>
     </main>
     <section class="chart-panel"><div class="chart-head"><div id="profile-labels" class="chart-labels" aria-label="Profile series"></div><div class="chart-controls"><div class="playback-speed"><label for="profile-axis-select">X AXIS</label><select id="profile-axis-select"><option value="time">Lap time</option><option value="distance">Track centerline distance</option></select></div><div class="playback-speed"><label for="speed-select">PLAYBACK</label><select id="speed-select"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></div></div></div><canvas id="profile-canvas" aria-label="Speed acceleration stability and curvature profile"></canvas></section>

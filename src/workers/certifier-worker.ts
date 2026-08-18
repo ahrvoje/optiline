@@ -60,8 +60,18 @@ self.addEventListener("message", (event: MessageEvent<CertifierCommand>) => {
           ...envelope(message), type: "trackCompiled", asset: message.asset,
         } satisfies CertifierEvent);
       } else if (message.type === "certifyCenterline") {
+        self.postMessage({
+          ...envelope(message), type: "certificationProgress",
+          candidateId: message.candidateId, completed: 0, total: 1,
+          label: "Checking binary64 centerline",
+        } satisfies CertifierEvent);
         api.loadContext(JSON.stringify(message.compiledTrack), JSON.stringify(message.vehicle));
         const result = api.certifyCandidate(new Float64Array(64));
+        self.postMessage({
+          ...envelope(message), type: "certificationProgress",
+          candidateId: message.candidateId, completed: 1, total: 1,
+          label: "Centerline certification complete",
+        } satisfies CertifierEvent);
         self.postMessage({
           ...envelope(message), type: "centerlineCertified", candidateId: message.candidateId,
           lapTime: result.lapTime,
@@ -75,6 +85,10 @@ self.addEventListener("message", (event: MessageEvent<CertifierCommand>) => {
           message.compiledTrack,
           message.vehicle,
           representation,
+          progress => self.postMessage({
+            ...envelope(message), type: "certificationProgress",
+            candidateId: message.candidateId, ...progress,
+          } satisfies CertifierEvent),
         );
         message.representations.curvature = curvatureRepresentationToJson(
           result.representation,

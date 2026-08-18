@@ -352,8 +352,14 @@ export type OptimizerCommand = MessageEnvelope &
         compiledTrack: CompiledTrackJson;
         vehicle: VehicleSettings;
         optimizer: OptimizerSettings;
+        /** Atomic STOP flag when cross-origin isolation is available. */
+        stopSignal: SharedArrayBuffer | null;
       }
-    | { type: "start"; seedGenotype: Float64Array | null; checkpoint: ArrayBuffer | null }
+    | {
+        type: "start";
+        seedGenotype: Float64Array | null;
+        checkpoint: ArrayBuffer | null;
+      }
     | { type: "stop" }
     | { type: "setCandidateVisibility"; count: number }
     | { type: "shutdown" }
@@ -399,34 +405,35 @@ export type OptimizerEvent = MessageEnvelope &
         lineOffsets: Uint32Array;
       }
     | {
-        type: "intermediateBest";
+        type: "discoverySnapshot";
         /** One-based completed 30-second interval of discovery. */
         sequence: number;
         elapsedMs: number;
-        /** Resampled preview lap and source binary64 optimizer lap. */
-        lapTime: number;
+        /** Source binary64 optimizer lap; never shown as a publishable lap. */
         optimizerLapTime: number;
-        lineLengthM: number;
-        pathSamples: Float64Array;
-        profileNodes: ProfileNodeJson[];
-      }
-    | {
-        type: "provisionalBest";
-        /** Every publishable optimizer result is canonical curvature. */
-        candidateSpace: "curvature";
-        /** Comparable live updates share a replacement key. */
-        candidateKey: string;
-        lapTime: number;
-        genotype: Float64Array;
         candidateId: number;
-        representations: V2RepresentationsJson;
+        basis: {
+          fourierModes: number;
+          residualControlCount: number;
+        };
+        corridor: {
+          lower: number;
+          upper: number;
+          betaSafeRad: number;
+          fallback: boolean;
+        };
+        /** Global discovery incumbent followed by at most one archive alternate. */
+        sources: Float64Array[];
       }
     | {
         type: "warning";
         stage: "curvature";
         message: string;
       }
-    | { type: "stopped"; checkpoint: ArrayBuffer }
+    | {
+        type: "stopped";
+        checkpoint: ArrayBuffer;
+      }
     | { type: "deviceLost"; reason: string }
     | { type: "error"; error: OpError }
   );
@@ -486,9 +493,77 @@ export type CertifierEvent = MessageEnvelope &
         representations: V2RepresentationsJson;
         certificate: CertificateReportJson;
       }
+    | {
+        type: "certificationProgress";
+        candidateId: number;
+        completed: number;
+        total: number;
+        label: string;
+      }
     | { type: "certificationFailed"; candidateId: number; error: OpError }
     | { type: "profileValidated"; profile: SavedProfileJson }
     | { type: "error"; error: OpError }
+  );
+
+/** Main -> independent live-presentation worker. */
+export type PresentationCommand = MessageEnvelope &
+  (
+    | {
+        type: "init";
+        compiledTrack: CompiledTrackJson;
+        vehicle: VehicleSettings;
+      }
+    | {
+        type: "prepareLiveProduct";
+        sequence: number;
+        elapsedMs: number;
+        optimizerLapTime: number;
+        candidateId: number;
+        basis: {
+          fourierModes: number;
+          residualControlCount: number;
+        };
+        corridor: {
+          lower: number;
+          upper: number;
+          betaSafeRad: number;
+          fallback: boolean;
+        };
+        sources: Float64Array[];
+      }
+  );
+
+/** Independent live-presentation worker -> main. */
+export type PresentationEvent = MessageEnvelope &
+  (
+    | {
+        type: "presentationProgress";
+        sequence: number;
+        completed: number;
+        total: number;
+        label: string;
+      }
+    | {
+        type: "liveProductCertified";
+        sequence: number;
+        elapsedMs: number;
+        optimizerLapTime: number;
+        candidateId: number;
+        genotype: Float64Array;
+        lapTime: number;
+        lineLengthM: number;
+        profileNodes: Float64Array;
+        edgeCount: number;
+        pathSamples: Float64Array;
+        representations: V2RepresentationsJson;
+        certificate: CertificateReportJson;
+        testedCandidates: number;
+      }
+    | {
+        type: "liveProductRejected";
+        sequence: number;
+        message: string;
+      }
   );
 
 /* ------------------------------------------------------------------ */

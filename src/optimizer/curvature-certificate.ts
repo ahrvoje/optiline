@@ -23,6 +23,14 @@ export interface CertifiedCurvatureCandidate {
   certificate: CertificateReportJson;
 }
 
+export const CURVATURE_CERTIFICATION_STAGE_COUNT = 7;
+
+export interface CurvatureCertificationProgress {
+  completed: number;
+  total: typeof CURVATURE_CERTIFICATION_STAGE_COUNT;
+  label: string;
+}
+
 function packedProfile(
   vehicle: VehicleSettings,
   score: ReturnType<typeof evaluateCurvatureCandidate>,
@@ -99,7 +107,14 @@ export function certifyCurvatureCandidate(
   track: CompiledTrackJson,
   vehicle: VehicleSettings,
   source: CurvatureRepresentation,
+  onProgress?: (progress: CurvatureCertificationProgress) => void,
 ): CertifiedCurvatureCandidate {
+  const report = (completed: number, label: string): void => onProgress?.({
+    completed,
+    total: CURVATURE_CERTIFICATION_STAGE_COUNT,
+    label,
+  });
+  report(0, "Projecting curvature closure");
   const representation = projectCurvatureClosure(source, {
     tolerance: 1e-11,
     sampleCount: 8192,
@@ -107,9 +122,13 @@ export function certifyCurvatureCandidate(
     selectCorrectionModes: false,
   });
   if (representation === null) throw new Error("curvature closure projection failed");
+  report(1, "Checking 2,048-edge mesh");
   const coarse = evaluateCurvatureCandidate(track, vehicle, representation, 2048);
+  report(2, "Checking 4,096-edge mesh");
   const refined = evaluateCurvatureCandidate(track, vehicle, representation, 4096);
+  report(3, "Checking 8,192-edge mesh");
   const finest = evaluateCurvatureCandidate(track, vehicle, representation, 8192);
+  report(4, "Measuring closure residuals");
   const closure = measureCurvatureClosure(representation, 16384);
   const physicalClosure = Math.max(
     Math.abs(closure.turn),
@@ -117,12 +136,14 @@ export function certifyCurvatureCandidate(
     representation.pathLengthM * Math.abs(closure.y),
   );
   const lapTimeDelta = Math.abs(finest.lapTime - refined.lapTime);
+  report(5, "Checking dynamic utilization");
   let speedScale = 1;
   let profile = packedProfile(vehicle, finest, speedScale);
   while (profile.maximumUtilization > 1 && speedScale > 0.98) {
     speedScale -= 0.0001;
     profile = packedProfile(vehicle, finest, speedScale);
   }
+  report(6, "Building certified path");
   // Every mesh uses an interval curvature upper bound, so the finest lap is
   // already a feasible upper bound. Mesh delta measures tightness; it is not
   // a feasibility condition and must not reject an otherwise certified path.
@@ -142,13 +163,15 @@ export function certifyCurvatureCandidate(
     codeVersion: 2,
     pass,
   };
+  const pathSamples = packedPath(representation, 4096);
+  report(7, "Certification complete");
   return {
     representation,
     lapTime: profile.lapTime,
     lineLengthM: finest.lapLengthM,
     profileNodes: profile.values,
     edgeCount: 8192,
-    pathSamples: packedPath(representation, 4096),
+    pathSamples,
     certificate,
   };
 }

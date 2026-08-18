@@ -8,11 +8,11 @@ test("starts a fresh optimizer after completed runs and track changes", async ({
 
   const optimize = page.locator("#optimize-button");
   for (const trackIndex of [1, 2, 3]) {
-    await page.locator("#candidate-rate").evaluate(element =>
+    await page.locator("#candidate-count").evaluate(element =>
       delete (element as HTMLElement).dataset.totalCandidates);
     await optimize.click();
     await expect(optimize).toHaveText("STOP");
-    await expect(page.locator("#candidate-rate")).toHaveAttribute(
+    await expect(page.locator("#candidate-count")).toHaveAttribute(
       "data-total-candidates",
       /\d+/,
       { timeout: 30_000 },
@@ -29,11 +29,11 @@ test("starts a fresh optimizer after completed runs and track changes", async ({
     await expect(page.locator("#engine-status")).not.toContainText("Optimizer error");
   }
 
-  await page.locator("#candidate-rate").evaluate(element =>
+  await page.locator("#candidate-count").evaluate(element =>
     delete (element as HTMLElement).dataset.totalCandidates);
   await optimize.click();
   await expect(optimize).toHaveText("STOP");
-  await expect(page.locator("#candidate-rate")).toHaveAttribute(
+  await expect(page.locator("#candidate-count")).toHaveAttribute(
     "data-total-candidates",
     /\d+/,
     { timeout: 30_000 },

@@ -13,6 +13,10 @@ import {
   type CurvatureRepresentation,
 } from "@/optimizer/curvature-closure";
 import { evaluateCurvatureCandidate } from "@/optimizer/curvature-evaluation";
+import {
+  certifyCurvatureCandidate,
+  CURVATURE_CERTIFICATION_STAGE_COUNT,
+} from "@/optimizer/curvature-certificate";
 import { evaluateFourierSeries, fitRealFourier } from "@/optimizer/fourier";
 import {
   buildHybridPeriodicBasis,
@@ -241,7 +245,21 @@ describe("V2 curvature closure projector", () => {
     const converged = evaluateCurvatureCandidate(track, DEFAULT_VEHICLE, representation, 4096);
     expect(doubled.feasible && quadrupled.feasible && converged.feasible).toBe(true);
     expect(Math.abs(converged.lapTime - quadrupled.lapTime)).toBeLessThan(0.1);
-  });
+    const reported: Array<{ completed: number; total: number }> = [];
+    const certified = certifyCurvatureCandidate(
+      track,
+      DEFAULT_VEHICLE,
+      representation,
+      progress => reported.push(progress),
+    );
+    expect(certified.edgeCount).toBe(8192);
+    expect(reported.map(progress => progress.completed)).toEqual(
+      Array.from({ length: CURVATURE_CERTIFICATION_STAGE_COUNT + 1 }, (_, index) => index),
+    );
+    expect(reported.every(progress =>
+      progress.total === CURVATURE_CERTIFICATION_STAGE_COUNT
+    )).toBe(true);
+  }, 30_000);
 
   it("preserves a noncenter Silver Delta discovery path", () => {
     const track = BUILT_IN_TRACKS.find(item => item.source.id === "silver-delta")!;
