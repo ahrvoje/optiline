@@ -153,12 +153,21 @@ test("loads the catalog and keeps primary actions coherent", async ({ page }) =>
   await expect(page.locator("#work-overlay")).toContainText("OPTIMIZING");
   await expect(page.locator("#work-overlay")).toBeVisible();
   await expect(page.locator(".validation-progress")).toBeHidden();
-  const metricsBox = await page.locator(".viewer-footer > .metrics").boundingBox();
-  const workBox = await page.locator("#work-overlay").boundingBox();
-  expect(metricsBox).not.toBeNull();
-  expect(workBox).not.toBeNull();
-  expect(workBox!.x).toBeGreaterThan(metricsBox!.x + metricsBox!.width);
-  expect(workBox!.width).toBeGreaterThanOrEqual(160);
+  const runningNotice = await page.locator("#work-overlay").evaluate(notice => {
+    const box = notice.getBoundingClientRect();
+    const topbar = notice.closest(".topbar")!.getBoundingClientRect();
+    const labelStyle = getComputedStyle(notice.querySelector("span")!);
+    return {
+      containedByTopbar: box.top >= topbar.top && box.bottom <= topbar.bottom,
+      fontSize: Number.parseFloat(labelStyle.fontSize),
+      fontWeight: Number(labelStyle.fontWeight),
+      animationName: labelStyle.animationName,
+    };
+  });
+  expect(runningNotice.containedByTopbar).toBe(true);
+  expect(runningNotice.fontSize).toBeGreaterThanOrEqual(16);
+  expect(runningNotice.fontWeight).toBeGreaterThanOrEqual(800);
+  expect(runningNotice.animationName).toContain("work-blink");
   await expect(play).toBeEnabled();
   // Wait for one complete GPU/CPU island generation. This validates the
   // optimizer shader and its storage-buffer contract, not only worker startup.
@@ -189,6 +198,19 @@ test("loads the catalog and keeps primary actions coherent", async ({ page }) =>
   });
   expect(stoppedUi).toEqual({ hidden: false, text: "VALIDATING", validating: true });
   await expect(page.locator(".validation-progress")).toBeVisible();
+  const validationGeometry = await page.locator("#work-overlay").evaluate(notice => {
+    const label = notice.querySelector("span")!.getBoundingClientRect();
+    const progress = notice.querySelector(".validation-progress")!.getBoundingClientRect();
+    const container = notice.getBoundingClientRect();
+    return {
+      progressBelowLabel: progress.top >= label.bottom,
+      progressInsideNotice: progress.bottom <= container.bottom,
+    };
+  });
+  expect(validationGeometry).toEqual({
+    progressBelowLabel: true,
+    progressInsideNotice: true,
+  });
   await expect(page.locator("#engine-status")).toContainText("Validating final candidates");
   await expect(page.locator("#engine-status")).toContainText("Stopped", { timeout: 30_000 });
   await expect(page.locator("#work-overlay")).toBeHidden({ timeout: 90_000 });

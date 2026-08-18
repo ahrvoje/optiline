@@ -8,3 +8,13 @@
 - Web: Node `C:\nvm4w\nodejs\node.exe`; npm `C:\nvm4w\nodejs\npm.cmd`; Chrome `C:\Program Files\Google\Chrome\Application\chrome.exe`.
 - Browser tests: Playwright 1.62.1, `C:\repos\optiline\node_modules\.bin\playwright.cmd`; bundled Chromium, `C:\Users\<USERNAME>\AppData\Local\ms-playwright\chromium-1234\chrome-win64\chrome.exe`.
 - GPU: Chrome WebGPU with WGSL compute/render shaders.
+
+# Python, ffmpeg, style
+
+Use Python interpreter at:
+c:\Users\<USERNAME>\AppData\Local\Programs\Python\Python314\
+
+Use ffmpeg at:
+C:\Users\<USERNAME>\AppData\Local\Programs\utils\ffmpeg\bin\ffmpeg.exe
+
+Use Windows line endings (CRLF) on Windows machines.

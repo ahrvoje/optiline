@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import { CHART_COLORS, type ProfileNodeJson } from "@/model/contracts";
 import { CONSTRAINT_COLORS } from "@/optimizer/constraint-domain";
-import { drawProfileChart, profileTimeAtCanvasX } from "@/renderer/profile-chart";
+import {
+  drawProfileChart,
+  PROFILE_CHART_AXIS_COLUMN_PX,
+  profileTimeAtCanvasX,
+} from "@/renderer/profile-chart";
 
 const nodes: ProfileNodeJson[] = [
   { parameter: 0, distance: 0, time: 0, q: 1, acceleration: 0, curvature: 0, stability: 0 },
@@ -17,13 +21,18 @@ function canvasAt(left = 20): HTMLCanvasElement {
   } as unknown as HTMLCanvasElement;
 }
 
+function clientXAtPlotRatio(ratio: number, canvasLeft = 20): number {
+  const plotLeft = 12 + PROFILE_CHART_AXIS_COLUMN_PX * 5;
+  const plotWidth = 1000 - plotLeft - 18;
+  return canvasLeft + plotLeft + plotWidth * ratio;
+}
+
 describe("profile chart selection", () => {
   it("maps a click to lap time after the five independent Y axes", () => {
     const profile = { nodes, lapTime: 10, lineLength: 600 };
-    // Plot begins at client x=392 and is 610 px wide for this test canvas.
-    expect(profileTimeAtCanvasX(canvasAt(), profile, "time", 392)).toBeCloseTo(0);
-    expect(profileTimeAtCanvasX(canvasAt(), profile, "time", 697)).toBeCloseTo(5);
-    expect(profileTimeAtCanvasX(canvasAt(), profile, "time", 1002)).toBeCloseTo(10);
+    expect(profileTimeAtCanvasX(canvasAt(), profile, "time", clientXAtPlotRatio(0))).toBeCloseTo(0);
+    expect(profileTimeAtCanvasX(canvasAt(), profile, "time", clientXAtPlotRatio(.5))).toBeCloseTo(5);
+    expect(profileTimeAtCanvasX(canvasAt(), profile, "time", clientXAtPlotRatio(1))).toBeCloseTo(10);
   });
 
   it("interpolates selected distance back to profile time", () => {
@@ -34,8 +43,8 @@ describe("profile chart selection", () => {
       axisDistances: [0, 50, 400, 500],
       axisLength: 600,
     };
-    expect(profileTimeAtCanvasX(canvasAt(), profile, "distance", 697)).toBeCloseTo(4.142857);
-    expect(profileTimeAtCanvasX(canvasAt(), profile, "distance", 849.5)).toBeCloseTo(6.5);
+    expect(profileTimeAtCanvasX(canvasAt(), profile, "distance", clientXAtPlotRatio(.5))).toBeCloseTo(4.142857);
+    expect(profileTimeAtCanvasX(canvasAt(), profile, "distance", clientXAtPlotRatio(.75))).toBeCloseTo(6.5);
   });
 
   it("draws a dotted purple zero-curvature reference", () => {

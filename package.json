@@ -6,7 +6,7 @@
   "description": "Certified intrinsic-curvature racing-line optimizer (static WebGPU app).",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node tools/stage-github-pages.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test:unit": "vitest run",

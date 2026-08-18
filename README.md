@@ -11,7 +11,15 @@ npm install
 npm run dev
 ```
 
-Open the shown local URL in current stable Chrome on Windows 11. Use `npm run build` for the static `dist/` deployment.
+Open the shown local URL in current stable Chrome on Windows 11.
+
+## Build for GitHub Pages
+
+```powershell
+npm run build
+```
+
+The build keeps the complete static site in `dist/` and also stages the files used by branch-based GitHub Pages in the repository root: `index.html`, `assets/`, both WASM reactors, and `.nojekyll`. All generated URLs are relative, so the site works from either a user Pages root or a project subpath such as `username.github.io/optiline/`.
 
 ## Build and test C99
 

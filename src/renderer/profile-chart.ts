@@ -50,10 +50,10 @@ export interface ChartOptions {
 interface Range { lo: number; hi: number; }
 interface Layout { left: number; right: number; top: number; bottom: number; width: number; height: number; }
 
-const AXIS_COLUMN = 72;
+export const PROFILE_CHART_AXIS_COLUMN_PX = 60;
 
 function chartLayout(width: number, height: number): Layout {
-  const left = 12 + AXIS_COLUMN * SERIES.length;
+  const left = 12 + PROFILE_CHART_AXIS_COLUMN_PX * SERIES.length;
   const right = 18;
   const top = 12;
   const bottom = 64;
@@ -224,7 +224,7 @@ export function drawProfileChart(
   for (let sIndex = 0; sIndex < SERIES.length; sIndex++) {
     const series = SERIES[sIndex]!;
     const range = ranges[sIndex]!;
-    const axisX = 10 + AXIS_COLUMN * sIndex + 52;
+    const axisX = 10 + PROFILE_CHART_AXIS_COLUMN_PX * sIndex + 52;
     ctx.strokeStyle = series.color;
     ctx.fillStyle = series.color;
     ctx.lineWidth = 1;

@@ -194,9 +194,8 @@ interface ReactorExports {
 }
 
 function wasmUrl(name: string): string {
-  const base = import.meta.env.BASE_URL ?? "./";
-  const root = base === "./" ? "/" : base;
-  return new URL(`${root}${name}`, self.location.origin).toString();
+  if (import.meta.env.DEV) return new URL(`/${name}`, self.location.origin).toString();
+  return new URL(`../${name}`, self.location.href).toString();
 }
 
 async function instantiateReactor(name: string): Promise<{
