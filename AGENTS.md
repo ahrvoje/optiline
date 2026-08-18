@@ -9,10 +9,13 @@
 - Browser tests: Playwright 1.62.1, `C:\repos\optiline\node_modules\.bin\playwright.cmd`; bundled Chromium, `C:\Users\<USERNAME>\AppData\Local\ms-playwright\chromium-1234\chrome-win64\chrome.exe`.
 - GPU: Chrome WebGPU with WGSL compute/render shaders.
 
-# Python, ffmpeg, style
+# Python, wcap, ffmpeg, style
 
 Use Python interpreter at:
 c:\Users\<USERNAME>\AppData\Local\Programs\Python\Python314\
+
+Screen capture utility
+C:\store\download\wcap-x64.exe
 
 Use ffmpeg at:
 C:\Users\<USERNAME>\AppData\Local\Programs\utils\ffmpeg\bin\ffmpeg.exe

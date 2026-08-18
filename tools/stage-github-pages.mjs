@@ -9,6 +9,7 @@ const rootAssets = join(projectRoot, "assets");
 await rm(rootAssets, { recursive: true, force: true });
 await cp(join(distRoot, "assets"), rootAssets, { recursive: true });
 await copyFile(join(distRoot, "index.html"), join(projectRoot, "index.html"));
+await copyFile(join(distRoot, "favicon.svg"), join(projectRoot, "favicon.svg"));
 await copyFile(
   join(distRoot, "optiline_certifier.wasm"),
   join(projectRoot, "optiline_certifier.wasm"),
