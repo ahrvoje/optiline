@@ -3,12 +3,10 @@
 <https://ahrvoje.github.io/optiline/>
 
 <p align="center">
-  <a href="./promo/optiline-promo-12s.mp4"><img src="./promo/optiline-promo-12s.gif" alt="Optiline 12-second promo"></a>
+  <img src="./promo/optiline-promo.gif" alt="Optiline 12-second promo">
 </p>
 
 Optiline is a browser-based laboratory for finding closed, minimum-lap-time racing trajectories inside exact Pythagorean-hodograph (PH) track boundaries. WebGPU searches large candidate populations, a binary64 CPU path validates finalists, and the shared C99/WebAssembly kernel supplies authoritative PH compilation and compatibility checks.
-
-[Open the full-quality MP4](./promo/optiline-promo-12s.mp4)
 
 ## Mathematical model
 
