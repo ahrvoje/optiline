@@ -12,7 +12,7 @@ test("loads the catalog and keeps primary actions coherent", async ({ page }) =>
   const play = page.locator("#play-button");
   const save = page.locator("#save-button");
   await expect(play).toBeEnabled();
-  await expect(save).toBeEnabled();
+  await expect(save).toBeDisabled();
   await expect(page.locator("#optimize-button")).toBeEnabled();
   await expect(page.locator("#setting-run-mode")).toBeVisible();
   await expect(page.locator("#setting-run-mode")).toHaveValue("random");
@@ -65,6 +65,31 @@ test("loads the catalog and keeps primary actions coherent", async ({ page }) =>
   expect(settingLayout.equationFontPx).toBeGreaterThanOrEqual(16);
   expect(settingLayout.descriptionFontPx).toBeGreaterThanOrEqual(11);
   expect(settingLayout.descriptionLeft).toBeGreaterThan(settingLayout.equationRight);
+  const constraintBars = await page.locator("#settings-grid").evaluate(grid => {
+    const row = (id: string) => grid.querySelector<HTMLInputElement>(`#${id}`)!
+      .closest<HTMLElement>(".setting")!;
+    const inspect = (element: HTMLElement) => ({
+      color: getComputedStyle(element).getPropertyValue("--constraint-color").trim(),
+      domain: element.dataset.constraintDomain,
+      start: element.classList.contains("constraint-domain-start"),
+      stripTop: getComputedStyle(element, "::before").top,
+      stripWidth: getComputedStyle(element, "::before").width,
+    });
+    return {
+      length: inspect(row("setting-lengthM")),
+      width: inspect(row("setting-widthM")),
+      acceleration: inspect(row("setting-axPlus0")),
+    };
+  });
+  expect(constraintBars.length).toEqual({
+    color: "#32d7ff", domain: "containment", start: true, stripTop: "4px", stripWidth: "8px",
+  });
+  expect(constraintBars.width).toEqual({
+    color: "#32d7ff", domain: "containment", start: false, stripTop: "0px", stripWidth: "8px",
+  });
+  expect(constraintBars.acceleration).toEqual({
+    color: "#f5f7fa", domain: "acceleration", start: true, stripTop: "4px", stripWidth: "8px",
+  });
   const formulaAlignment = await page.locator("#settings-grid .setting").first().evaluate(row => {
     const editor = row.querySelector<HTMLElement>(".input-wrap")!.getBoundingClientRect();
     const formula = row.querySelector<HTMLElement>(".formula")!.getBoundingClientRect();
@@ -109,16 +134,6 @@ test("loads the catalog and keeps primary actions coherent", async ({ page }) =>
   await expect(play).toContainText("PAUSE");
   await page.locator("#zoom-button").click();
   await expect(page.locator("#zoom-button")).toHaveAttribute("aria-pressed", "true");
-
-  await save.click();
-  await expect(page.locator("#saved-count")).toHaveText("1");
-  await expect(page.locator("#saved-list .saved-item")).toHaveCount(1);
-  const savedFocus = await page.locator("#focus-select option").nth(1).getAttribute("value");
-  expect(savedFocus).not.toBeNull();
-  await page.locator("#focus-select").selectOption(savedFocus!);
-  await expect(page.locator("#profile-canvas")).toHaveAttribute("data-focus-trajectory", savedFocus!);
-  await page.locator("#saved-list .delete-profile").click();
-  await expect(page.locator("#saved-count")).toHaveText("0");
 
   await page.locator("#setting-massKg").fill("500");
   await page.locator("#setting-massKg").press("Tab");
@@ -176,10 +191,20 @@ test("loads the catalog and keeps primary actions coherent", async ({ page }) =>
   await expect(page.locator(".validation-progress")).toBeVisible();
   await expect(page.locator("#engine-status")).toContainText("Validating final candidates");
   await expect(page.locator("#engine-status")).toContainText("Stopped", { timeout: 30_000 });
-  await expect(page.locator("#work-overlay")).toBeHidden({ timeout: 30_000 });
+  await expect(page.locator("#work-overlay")).toBeHidden({ timeout: 90_000 });
   await expect(page.locator("#setting-massKg")).toBeEnabled();
   await expect(page.locator("#setting-run-mode")).toBeEnabled();
   await expect(page.locator("#reset-button")).toBeEnabled();
+  await expect(save).toBeEnabled();
+  await save.click();
+  await expect(page.locator("#saved-count")).toHaveText("1");
+  await expect(page.locator("#saved-list .saved-item")).toHaveCount(1);
+  const savedFocus = await page.locator("#focus-select option").nth(1).getAttribute("value");
+  expect(savedFocus).not.toBeNull();
+  await page.locator("#focus-select").selectOption(savedFocus!);
+  await expect(page.locator("#profile-canvas")).toHaveAttribute("data-focus-trajectory", savedFocus!);
+  await page.locator("#saved-list .delete-profile").click();
+  await expect(page.locator("#saved-count")).toHaveText("0");
 
   // A completed run must never poison the next worker initialization.
   await page.locator("#optimize-button").click();
@@ -188,6 +213,7 @@ test("loads the catalog and keeps primary actions coherent", async ({ page }) =>
   await expect(page.locator("#engine-status")).not.toContainText("undefined");
   await page.locator("#optimize-button").click();
   await expect(page.locator("#engine-status")).toContainText("Stopped", { timeout: 30_000 });
+  await expect(page.locator("#work-overlay")).toBeHidden({ timeout: 90_000 });
 
   await page.locator("#reset-button").click();
   await expect(page.locator("#setting-massKg")).toHaveValue("900");

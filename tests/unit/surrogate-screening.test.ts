@@ -58,4 +58,31 @@ describe("surrogate screening", () => {
       observation(0, candidate, 30 + candidate, candidate === 5));
     expect(selectFullEvaluationIndices(observations, 0, 4)).toEqual([0, 1, 2, 3]);
   });
+
+  it("keeps one proxy elite and one exploratory sample at the small budget", () => {
+    const observations = Array.from({ length: 8 }, (_, candidate) =>
+      observation(0, candidate, 30 + candidate, candidate >= 4));
+    const selected = selectFullEvaluationIndices(observations, 0, 2);
+    expect(selected).toHaveLength(2);
+    expect(selected).toContain(0);
+    expect(selected.some(index => observations[index]!.candidate.exploratory)).toBe(true);
+  });
+
+  it("rotates one exploratory truth check across islands at the minimum budget", () => {
+    const observations: IslandObservation[] = [];
+    for (let island = 0; island < 2; island++) {
+      for (let candidate = 0; candidate < 8; candidate++) {
+        observations.push(observation(island, candidate, 30 + candidate, candidate >= 4));
+      }
+    }
+    const first = selectFullEvaluationIndices(observations, 0, 1)
+      .map(index => observations[index]!);
+    expect(first).toHaveLength(2);
+    expect(first.find(item => item.candidate.island === 0)!.candidate.exploratory).toBe(true);
+    expect(first.find(item => item.candidate.island === 1)!.candidate.candidateInIsland).toBe(0);
+    const second = selectFullEvaluationIndices(observations, 1, 1)
+      .map(index => observations[index]!);
+    expect(second.find(item => item.candidate.island === 0)!.candidate.candidateInIsland).toBe(0);
+    expect(second.find(item => item.candidate.island === 1)!.candidate.exploratory).toBe(true);
+  });
 });

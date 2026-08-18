@@ -286,6 +286,7 @@ export function evaluateCurvatureCandidate(
       rmsLateralJerk: 0,
       speedOptimalityResidual: Infinity,
       speedSquared: null,
+      distances,
       frames,
     };
   }
@@ -347,6 +348,7 @@ export function evaluateCurvatureCandidate(
     rmsLateralJerk: elapsed > 0 ? Math.sqrt(jerkSquaredIntegral / elapsed) : 0,
     speedOptimalityResidual,
     speedSquared,
+    distances,
     frames,
   };
 }

@@ -15,9 +15,9 @@ export type ConstraintDomain =
 export type ProfileLimitDomain = Exclude<ConstraintDomain, "containment" | "curvature">;
 
 export const CONSTRAINT_COLORS: Record<ConstraintDomain, string> = {
-  containment: "#f5f7fa",
+  containment: "#32d7ff",
   speed: "#ffd60a",
-  acceleration: "#32d7ff",
+  acceleration: "#f5f7fa",
   braking: "#268cff",
   lateral: "#ff2dbf",
   combined: "#7ee000",

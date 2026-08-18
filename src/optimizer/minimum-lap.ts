@@ -27,6 +27,8 @@ export interface CandidateEvaluation {
   rmsLateralJerk: number;
   speedOptimalityResidual: number;
   speedSquared: Float64Array | null;
+  /** Physical interval lengths from station i to i+1. */
+  distances: Float64Array;
   frames: RacingLineFrame[];
 }
 
@@ -295,6 +297,7 @@ export function evaluateMinimumLapCandidate(
       rmsLateralJerk: 0,
       speedOptimalityResidual: Infinity,
       speedSquared: null,
+      distances,
       frames,
     };
   }
@@ -358,6 +361,7 @@ export function evaluateMinimumLapCandidate(
     rmsLateralJerk: elapsed > 0 ? Math.sqrt(jerkSquaredIntegral / elapsed) : 0,
     speedOptimalityResidual,
     speedSquared,
+    distances,
     frames,
   };
 }

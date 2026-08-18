@@ -4,9 +4,11 @@ import {
 } from "@/optimizer/island-es";
 
 /**
- * Promote proxy elites plus one deterministic antithetic exploration pair per
- * island. This prevents the screening surrogate from defining the ES search
- * direction while keeping the number of full evaluations fixed.
+ * Promote proxy elites plus deterministic exploration samples per island.
+ * With four or more promotions, reserve an antithetic exploration pair. With
+ * two promotions, keep one elite and one rotating exploratory sample so the
+ * binary64 gate remains useful at small fixed budgets. With one promotion,
+ * rotate the exploration duty across islands and promote elites elsewhere.
  */
 export function selectFullEvaluationIndices(
   observations: IslandObservation[],
@@ -14,7 +16,7 @@ export function selectFullEvaluationIndices(
   evaluationsPerIsland = 4,
 ): number[] {
   if (!Number.isInteger(generation) || generation < 0 ||
-      !Number.isInteger(evaluationsPerIsland) || evaluationsPerIsland < 2) {
+      !Number.isInteger(evaluationsPerIsland) || evaluationsPerIsland < 1) {
     throw new RangeError("invalid full-evaluation selection request");
   }
   const indices: number[] = [];
@@ -26,7 +28,17 @@ export function selectFullEvaluationIndices(
         item.observation.score.feasible)
       .sort((a, b) => compareFeasibleFirst(a.observation.score, b.observation.score));
     const selected = new Set<number>();
-    const proxyEliteCount = Math.max(0, evaluationsPerIsland - 2);
+    if (evaluationsPerIsland === 1) {
+      const exploratory = ranked.filter(item => item.observation.candidate.exploratory);
+      const explorationIsland = generation % Math.max(1, islandCount);
+      const choice = island === explorationIsland && exploratory.length > 0
+        ? exploratory[Math.floor(generation / Math.max(1, islandCount)) % exploratory.length]!
+        : ranked[0];
+      if (choice !== undefined) indices.push(choice.index);
+      continue;
+    }
+    const exploratoryBudget = evaluationsPerIsland >= 4 ? 2 : 1;
+    const proxyEliteCount = evaluationsPerIsland - exploratoryBudget;
     for (const item of ranked.slice(0, proxyEliteCount)) selected.add(item.index);
 
     const exploratoryPairs = new Map<number, number[]>();
@@ -40,9 +52,15 @@ export function selectFullEvaluationIndices(
     const completePairs = [...exploratoryPairs.entries()]
       .filter(([, pairIndices]) => pairIndices.length === 2)
       .sort(([a], [b]) => a - b);
-    if (completePairs.length > 0) {
+    if (exploratoryBudget === 2 && completePairs.length > 0) {
       const pair = completePairs[(generation + 3 * island) % completePairs.length]![1];
       for (const index of pair) selected.add(index);
+    } else if (exploratoryBudget === 1) {
+      const exploratory = ranked.filter(item =>
+        item.observation.candidate.exploratory && !selected.has(item.index));
+      if (exploratory.length > 0) {
+        selected.add(exploratory[(generation + 3 * island) % exploratory.length]!.index);
+      }
     }
     for (const item of ranked) {
       if (selected.size >= evaluationsPerIsland) break;

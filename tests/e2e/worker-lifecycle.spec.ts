@@ -4,7 +4,7 @@ test("starts a fresh optimizer after completed runs and track changes", async ({
   const pageErrors: string[] = [];
   page.on("pageerror", error => pageErrors.push(error.message));
   await page.goto("/");
-  await expect(page.locator("#save-button")).toBeEnabled({ timeout: 30_000 });
+  await expect(page.locator("#engine-status")).toContainText("Certified", { timeout: 30_000 });
 
   const optimize = page.locator("#optimize-button");
   for (const trackIndex of [1, 2, 3]) {

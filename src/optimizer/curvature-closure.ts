@@ -88,6 +88,30 @@ export function curvatureRepresentationFromJson(
   };
 }
 
+/** Serialize the exact authoritative curvature object after closure projection. */
+export function curvatureRepresentationToJson(
+  representation: CurvatureRepresentation,
+): FinalCurvatureRepresentationJson {
+  const fourierCount = fourierCoefficientCount(representation.basis.fourierModes);
+  return {
+    schemaVersion: 2,
+    pathLengthM: representation.pathLengthM,
+    winding: representation.winding,
+    fourierModes: representation.basis.fourierModes,
+    fourierCoefficients: Array.from(representation.coefficients.slice(0, fourierCount)),
+    residualControlCount: representation.basis.residualControlCount,
+    residualCoefficients: Array.from(representation.coefficients.slice(fourierCount)),
+    closureModes: representation.correctionModes.map(mode => ({ ...mode })),
+    closureCoefficients: Array.from(representation.correctionCoefficients),
+    rigidTransform: {
+      rotationRad: representation.rotationRad,
+      translationM: [...representation.translation],
+    },
+    seamPhase: representation.seamPhase,
+    closureResiduals: { ...representation.closureResiduals },
+  };
+}
+
 export interface ClosureProjectionOptions {
   tolerance?: number;
   sampleCount?: number;

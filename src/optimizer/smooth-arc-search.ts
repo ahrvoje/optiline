@@ -1,6 +1,11 @@
 import { fourierCoefficientCount } from "@/optimizer/fourier";
 import type { HybridPeriodicBasis } from "@/optimizer/hybrid-basis";
 
+export interface PatternProxyScore {
+  feasible: boolean;
+  lapTime: number;
+}
+
 function cyclicDistance(a: number, b: number, count: number): number {
   const direct = Math.abs(a - b);
   return Math.min(direct, count - direct);
@@ -95,6 +100,87 @@ export function smoothPatternProposals(
           coefficientLimit,
         ));
       }
+    }
+  }
+  return proposals;
+}
+
+function scaledCombination(
+  base: Float64Array,
+  deltas: Float64Array[],
+  scale: number,
+  coefficientLimit: number,
+): Float64Array {
+  const combined = base.slice();
+  for (const delta of deltas) {
+    for (let i = 0; i < combined.length; i++) {
+      combined[i] = Math.max(
+        -coefficientLimit,
+        Math.min(coefficientLimit, combined[i]! + scale * delta[i]!),
+      );
+    }
+  }
+  return combined;
+}
+
+/** Combine symmetric probes into simultaneous smooth trust-region moves. */
+export function quadraticPatternCombinations(
+  base: Float64Array,
+  pairedProposals: Float64Array[],
+  baseScore: PatternProxyScore,
+  proposalScores: PatternProxyScore[],
+  spectralPairCount: number,
+  coefficientLimit = 2,
+): Float64Array[] {
+  if (pairedProposals.length !== proposalScores.length ||
+      (pairedProposals.length & 1) !== 0 ||
+      !Number.isInteger(spectralPairCount) || spectralPairCount < 0 ||
+      2 * spectralPairCount > pairedProposals.length) {
+    throw new RangeError("invalid paired pattern observations");
+  }
+  const spectral: Float64Array[] = [];
+  const local: Array<{ gain: number; delta: Float64Array }> = [];
+  for (let pair = 0; 2 * pair < pairedProposals.length; pair++) {
+    const minus = pairedProposals[2 * pair]!;
+    const plus = pairedProposals[2 * pair + 1]!;
+    const minusScore = proposalScores[2 * pair]!;
+    const plusScore = proposalScores[2 * pair + 1]!;
+    if (!baseScore.feasible || (!minusScore.feasible && !plusScore.feasible)) continue;
+    const feasibleMinus = minusScore.feasible ? minusScore.lapTime : Infinity;
+    const feasiblePlus = plusScore.feasible ? plusScore.lapTime : Infinity;
+    const gain = baseScore.lapTime - Math.min(feasibleMinus, feasiblePlus);
+    if (!(gain > 0)) continue;
+    const delta = new Float64Array(base.length);
+    if (minusScore.feasible && plusScore.feasible) {
+      const curvature = minusScore.lapTime + plusScore.lapTime - 2 * baseScore.lapTime;
+      const stationary = curvature > 1e-7
+        ? (minusScore.lapTime - plusScore.lapTime) / (2 * curvature)
+        : minusScore.lapTime < plusScore.lapTime ? -1 : 1;
+      const amount = Math.max(-1, Math.min(1, stationary));
+      for (let i = 0; i < delta.length; i++) {
+        delta[i] = 0.5 * amount * (plus[i]! - minus[i]!);
+      }
+    } else {
+      const improving = minusScore.feasible ? minus : plus;
+      for (let i = 0; i < delta.length; i++) delta[i] = improving[i]! - base[i]!;
+    }
+    if (pair < spectralPairCount) spectral.push(delta);
+    else local.push({ gain, delta });
+  }
+  local.sort((a, b) => b.gain - a.gain);
+  const localDeltas = local.slice(0, 8).map(item => item.delta);
+  const proposals: Float64Array[] = [];
+  for (const scale of [0.25, 0.5, 1]) {
+    if (spectral.length > 0) {
+      proposals.push(scaledCombination(base, spectral, scale, coefficientLimit));
+    }
+    if (localDeltas.length > 0) {
+      proposals.push(scaledCombination(base, localDeltas, scale, coefficientLimit));
+    }
+    if (spectral.length > 0 && localDeltas.length > 0) {
+      proposals.push(scaledCombination(
+        base, [...spectral, ...localDeltas], scale, coefficientLimit,
+      ));
     }
   }
   return proposals;

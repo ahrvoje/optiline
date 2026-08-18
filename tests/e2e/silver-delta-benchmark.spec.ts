@@ -12,6 +12,12 @@ interface AuditRecord {
   genotype?: number[];
   elapsedMs?: number;
   batchLatencyMs?: unknown;
+  phaseLatencyMs?: unknown;
+  sequence?: number;
+  optimizerLapTime?: number;
+  lineLengthM?: number;
+  profileNodeCount?: number;
+  pathSampleCount?: number;
   seedLo?: number;
   seedHi?: number;
   certificatePass?: boolean;
@@ -83,6 +89,20 @@ test("benchmarks the complete Silver Delta pipeline", async ({ page }, testInfo)
             ...(typeof value["batchLatencyMs"] === "object"
               ? { batchLatencyMs: value["batchLatencyMs"] }
               : {}),
+            ...(typeof value["phaseLatencyMs"] === "object"
+              ? { phaseLatencyMs: value["phaseLatencyMs"] }
+              : {}),
+            ...(typeof value["sequence"] === "number" ? { sequence: value["sequence"] } : {}),
+            ...(typeof value["optimizerLapTime"] === "number"
+              ? { optimizerLapTime: value["optimizerLapTime"] }
+              : {}),
+            ...(typeof value["lineLengthM"] === "number"
+              ? { lineLengthM: value["lineLengthM"] }
+              : {}),
+            ...(Array.isArray(profile) ? { profileNodeCount: profile.length } : {}),
+            ...(value["pathSamples"] instanceof Float64Array
+              ? { pathSampleCount: value["pathSamples"].length / 5 }
+              : {}),
             ...(genotype instanceof Float64Array ? { genotype: Array.from(genotype) } : {}),
             ...(typeof certificate?.["pass"] === "boolean"
               ? { certificatePass: certificate["pass"] as boolean }
@@ -144,6 +164,27 @@ test("benchmarks the complete Silver Delta pipeline", async ({ page }, testInfo)
     const records = (window as unknown as { __optimizerAudit: AuditRecord[] }).__optimizerAudit;
     return records.some(record => record.type === "progress" && (record.batches ?? 0) >= target);
   }, targetBatches, { timeout: 720_000 });
+  if (process.env["OPTILINE_BENCHMARK_EXPECT_INTERMEDIATE"] === "1") {
+    await page.waitForFunction(() => {
+      const records = (window as unknown as { __optimizerAudit: AuditRecord[] }).__optimizerAudit;
+      return records.some(record => record.type === "intermediateBest");
+    });
+    const intermediate = await page.evaluate(() =>
+      (window as unknown as { __optimizerAudit: AuditRecord[] }).__optimizerAudit.findLast(
+        record => record.type === "intermediateBest",
+      )!
+    );
+    expect(intermediate.profileNodeCount).toBe(512);
+    expect(intermediate.pathSampleCount).toBe(512);
+    await expect(page.locator("#engine-status")).toContainText("preview");
+    await expect(page.locator("#lap-time")).toHaveText(`${intermediate.lapTime!.toFixed(3)} s`);
+    await expect(page.locator("#line-length")).toHaveText(
+      `${intermediate.lineLengthM!.toFixed(1)} m`,
+    );
+    await page.locator("#play-button").click();
+    await expect(page.locator("#play-button")).toContainText("PAUSE");
+    await page.locator("#play-button").click();
+  }
   await page.locator("#optimize-button").click();
   await expect(page.locator("#engine-status")).toContainText("Stopped", { timeout: 180_000 });
   await expect(page.locator("#work-overlay")).toBeHidden({ timeout: 180_000 });
@@ -172,15 +213,27 @@ test("benchmarks the complete Silver Delta pipeline", async ({ page }, testInfo)
       provisionalLapTime: record.provisionalLapTime,
       elapsedMs: record.elapsedMs,
       batchLatencyMs: record.batchLatencyMs,
+      phaseLatencyMs: record.phaseLatencyMs,
     })),
     finalists: report.records.filter(record => record.type === "provisionalBest").map(record => ({
       candidateSpace: record.candidateSpace,
       candidateKey: record.candidateKey,
       lapTime: record.lapTime,
     })),
+    intermediates: report.records.filter(record => record.type === "intermediateBest").map(
+      record => ({
+        sequence: record.sequence,
+        elapsedMs: record.elapsedMs,
+        optimizerLapTime: record.optimizerLapTime,
+        lapTime: record.lapTime,
+        lineLengthM: record.lineLengthM,
+        profileNodeCount: record.profileNodeCount,
+        pathSampleCount: record.pathSampleCount,
+      }),
+    ),
     certified: report.records.filter(record =>
       record.direction === "event" &&
-      (record.type === "certified" || record.type === "curvatureCertified")
+      (record.type === "centerlineCertified" || record.type === "curvatureCertified")
     ).map(record => ({
       type: record.type,
       lapTime: record.lapTime,
@@ -195,9 +248,12 @@ test("benchmarks the complete Silver Delta pipeline", async ({ page }, testInfo)
     displayedLapTime: summary.displayedLapTime,
     status: summary.status,
     finalTruthLapTime: summary.progress.at(-1)?.provisionalLapTime,
+    lastSearchProgress: summary.progress.findLast(record => record.stage !== "curvature"),
+    curvatureProgress: summary.progress.findLast(record => record.stage === "curvature"),
     certifiedCount: summary.certified.length,
     finalCertificate: summary.certified.at(-1),
     curvatureFinalist: summary.finalists.find(record => record.candidateSpace === "curvature"),
+    intermediates: summary.intermediates,
     eventCounts: Object.fromEntries(Object.entries(report.records.reduce<Record<string, number>>(
       (counts, record) => ({ ...counts, [record.type]: (counts[record.type] ?? 0) + 1 }),
       {},

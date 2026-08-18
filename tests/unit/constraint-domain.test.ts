@@ -21,16 +21,17 @@ const node = (changes: Partial<ProfileNodeJson> = {}): ProfileNodeJson => ({
 describe("profile limiting-constraint classification", () => {
   it("keeps containment visually distinct from lateral grip", () => {
     const rgb = (hex: string): number[] => [1, 3, 5].map(offset =>
-      Number.parseInt(hex.slice(offset, offset + 2), 16) / 255);
-    const luminance = (hex: string): number => {
-      const [r, g, b] = rgb(hex).map(channel => channel <= 0.04045
-        ? channel / 12.92
-        : ((channel + 0.055) / 1.055) ** 2.4);
-      return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
-    };
-    expect(Math.abs(
-      luminance(CONSTRAINT_COLORS.containment) - luminance(CONSTRAINT_COLORS.lateral),
-    )).toBeGreaterThan(0.5);
+      Number.parseInt(hex.slice(offset, offset + 2), 16));
+    const containment = rgb(CONSTRAINT_COLORS.containment);
+    const lateral = rgb(CONSTRAINT_COLORS.lateral);
+    const channelDistance = Math.hypot(...containment.map((value, index) =>
+      value - lateral[index]!));
+    expect(channelDistance).toBeGreaterThan(200);
+  });
+
+  it("uses white for acceleration and the former acceleration cyan for containment", () => {
+    expect(CONSTRAINT_COLORS.acceleration).toBe("#f5f7fa");
+    expect(CONSTRAINT_COLORS.containment).toBe("#32d7ff");
   });
 
   it("excludes geometric containment and explicit curvature", () => {

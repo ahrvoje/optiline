@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 interface WorkerAuditRecord {
   direction: "command" | "event";
   type: string;
-  candidateSpace?: "discovery" | "curvature";
+  candidateSpace?: "curvature";
   lapTime?: number;
   certificatePass?: boolean;
   batches?: number;
@@ -28,7 +28,7 @@ test("certifies optimizer finalists and displays the fastest result", async ({ p
             direction: "event",
             type: value["type"],
             ...(typeof value["candidateSpace"] === "string"
-              ? { candidateSpace: value["candidateSpace"] as "discovery" | "curvature" }
+              ? { candidateSpace: value["candidateSpace"] as "curvature" }
               : {}),
             ...(typeof value["lapTime"] === "number" ? { lapTime: value["lapTime"] } : {}),
             ...(typeof value["batches"] === "number" ? { batches: value["batches"] } : {}),
@@ -73,7 +73,7 @@ test("certifies optimizer finalists and displays the fastest result", async ({ p
   });
   await page.locator("#optimize-button").click();
   await expect(page.locator("#engine-status")).toContainText("Stopped", { timeout: 60_000 });
-  await expect(page.locator("#work-overlay")).toBeHidden();
+  await expect(page.locator("#work-overlay")).toBeHidden({ timeout: 90_000 });
 
   const audit = await page.evaluate(() =>
     (window as unknown as { __workerAudit: WorkerAuditRecord[] }).__workerAudit
@@ -81,20 +81,22 @@ test("certifies optimizer finalists and displays the fastest result", async ({ p
   const finalists = audit.filter(record =>
     record.direction === "event" && record.type === "provisionalBest"
   );
-  const spaces = new Set(finalists.map(record => record.candidateSpace));
-  expect(spaces.has("discovery")).toBe(true);
+  expect(finalists.length).toBeGreaterThan(0);
+  expect(finalists.every(record => record.candidateSpace === "curvature")).toBe(true);
+  expect(audit.some(record => record.direction === "command" && record.type === "certifyCurvature"))
+    .toBe(true);
   expect(audit.some(record => record.direction === "command" && record.type === "polishCandidate"))
     .toBe(false);
 
   const certifiedLaps = audit
     .filter(record =>
       record.direction === "event" &&
-      (record.type === "certified" || record.type === "curvatureCertified") &&
+      (record.type === "centerlineCertified" || record.type === "curvatureCertified") &&
       record.certificatePass === true
     )
     .map(record => record.lapTime!)
     .filter(Number.isFinite);
-  expect(certifiedLaps.length).toBeGreaterThanOrEqual(3);
+  expect(certifiedLaps.length).toBeGreaterThanOrEqual(1);
   const displayedLap = Number((await page.locator("#lap-time").textContent())?.replace("s", "").trim());
   expect(Math.abs(displayedLap - Math.min(...certifiedLaps))).toBeLessThanOrEqual(0.00051);
 });

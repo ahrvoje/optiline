@@ -8,6 +8,7 @@ import {
   spanDisplacement,
   spanPreimageBezier,
   type LineSpec,
+  type PhLineSpec,
 } from "@/renderer/ph-tessellate";
 
 export const SEARCH_LOCAL_MODE_COUNT = 128;
@@ -206,7 +207,7 @@ function lineFromPreimage(
   track: CompiledTrackJson,
   preimage: Float64Array,
   startCoordinate = 0,
-): LineSpec {
+): PhLineSpec {
   const origin = track.gatePoints[0]!;
   const normal = centerStartNormal(track);
   const offset = startOffsetM(track, startCoordinate);
@@ -223,7 +224,7 @@ function lineFromPreimage(
 export function lineFromSearchDelta(
   track: CompiledTrackJson,
   delta: ArrayLike<number>,
-): LineSpec {
+): PhLineSpec {
   const preimage = flattenPairs(track.centerPreimageControls);
   const basis = searchModeBasis(track);
   for (let j = 0; j < 128; j++) {
@@ -242,13 +243,13 @@ export function lineFromSearchDelta(
 /** Apply the one localized coordinate move used by one GPU candidate. */
 export function candidateLineFromSearch(
   track: CompiledTrackJson,
-  incumbentLine: LineSpec,
+  incumbentLine: PhLineSpec,
   incumbent: ArrayLike<number>,
   candidate: number,
   batch: number,
   sigma: number,
   seed: number,
-): LineSpec {
+): PhLineSpec {
   const next = candidateSearchDelta(incumbent, candidate, batch, sigma, seed);
   const basis = searchModeBasis(track);
   const preimage = incumbentLine.preimage.slice();
@@ -265,7 +266,7 @@ export function candidateLineFromSearch(
   return lineFromPreimage(track, preimage, next[SEARCH_START_MODE] ?? 0);
 }
 
-export function genotypeForLine(track: CompiledTrackJson, line: LineSpec): Float64Array {
+export function genotypeForLine(track: CompiledTrackJson, line: PhLineSpec): Float64Array {
   const genotype = new Float64Array(64);
   const center = {
     preimage: flattenPairs(track.centerPreimageControls),

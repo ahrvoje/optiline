@@ -1,7 +1,15 @@
 /** Binary64 WASM certifier worker adapter. */
-import type { CertifierCommand, CertifierEvent, CompiledTrackJson } from "@/model/contracts";
+import type {
+  CertifierCommand,
+  CertifierEvent,
+  CompiledTrackJson,
+  ProfileNodeJson,
+} from "@/model/contracts";
 import { certifyCurvatureCandidate } from "@/optimizer/curvature-certificate";
-import { curvatureRepresentationFromJson } from "@/optimizer/curvature-closure";
+import {
+  curvatureRepresentationFromJson,
+  curvatureRepresentationToJson,
+} from "@/optimizer/curvature-closure";
 import { loadCertifier } from "@/workers/wasm-loader";
 
 let api: Awaited<ReturnType<typeof loadCertifier>> | null = null;
@@ -12,6 +20,21 @@ function envelope(message: CertifierCommand) {
     trackFingerprint: message.trackFingerprint,
     settingsFingerprint: message.settingsFingerprint,
   };
+}
+
+function unpackProfile(values: Float64Array, edgeCount: number): ProfileNodeJson[] {
+  return Array.from({ length: edgeCount }, (_, index) => {
+    const offset = 7 * index;
+    return {
+      parameter: values[offset]!,
+      distance: values[offset + 1]!,
+      time: values[offset + 2]!,
+      q: values[offset + 3]!,
+      acceleration: values[offset + 4]!,
+      curvature: values[offset + 5]!,
+      stability: values[offset + 6]!,
+    };
+  });
 }
 
 self.addEventListener("message", (event: MessageEvent<CertifierCommand>) => {
@@ -36,28 +59,14 @@ self.addEventListener("message", (event: MessageEvent<CertifierCommand>) => {
         self.postMessage({
           ...envelope(message), type: "trackCompiled", asset: message.asset,
         } satisfies CertifierEvent);
-      } else if (message.type === "certifyCandidate") {
+      } else if (message.type === "certifyCenterline") {
         api.loadContext(JSON.stringify(message.compiledTrack), JSON.stringify(message.vehicle));
-        let result = api.certifyCandidate(message.genotype, message.warmPreimage);
-
-        // A warm PH reconstruction is an acceleration hint, not an objective.
-        // Certify the cold reconstruction too and retain the faster valid one.
-        if (message.warmPreimage !== undefined) {
-          try {
-            const cold = api.certifyCandidate(message.genotype);
-            if (cold.certificate.pass &&
-                (!result.certificate.pass || cold.lapTime < result.lapTime)) {
-              result = cold;
-            }
-          } catch {
-            // The warm reconstruction remains authoritative when cold projection fails.
-          }
-        }
+        const result = api.certifyCandidate(new Float64Array(64));
         self.postMessage({
-          ...envelope(message), type: "certified", candidateId: message.candidateId,
-          lapTime: result.lapTime, genotype: message.genotype, preimage: result.preimage,
+          ...envelope(message), type: "centerlineCertified", candidateId: message.candidateId,
+          lapTime: result.lapTime,
           profileNodes: result.nodes, edgeCount: result.edgeCount, certificate: result.certificate,
-        } satisfies CertifierEvent, [result.preimage.buffer, result.nodes.buffer]);
+        } satisfies CertifierEvent, [result.nodes.buffer]);
       } else if (message.type === "certifyCurvature") {
         const representation = curvatureRepresentationFromJson(
           message.representations.curvature,
@@ -67,7 +76,10 @@ self.addEventListener("message", (event: MessageEvent<CertifierCommand>) => {
           message.vehicle,
           representation,
         );
-        message.representations.curvature.closureResiduals = {
+        message.representations.curvature = curvatureRepresentationToJson(
+          result.representation,
+        );
+        message.representations.optimality.closure = {
           ...result.representation.closureResiduals,
         };
         self.postMessage({
@@ -75,7 +87,6 @@ self.addEventListener("message", (event: MessageEvent<CertifierCommand>) => {
           type: "curvatureCertified",
           candidateId: message.candidateId,
           genotype: message.genotype,
-          preimage: message.preimage,
           lapTime: result.lapTime,
           lineLengthM: result.lineLengthM,
           profileNodes: result.profileNodes,
@@ -85,18 +96,38 @@ self.addEventListener("message", (event: MessageEvent<CertifierCommand>) => {
           certificate: result.certificate,
         } satisfies CertifierEvent, [
           message.genotype.buffer,
-          message.preimage.buffer,
           result.profileNodes.buffer,
           result.pathSamples.buffer,
         ]);
       } else if (message.type === "certifyImportedProfile") {
-        api.loadContext(
-          JSON.stringify(message.compiledTrack),
-          JSON.stringify(message.profile.vehicleSettings),
+        const representation = curvatureRepresentationFromJson(
+          message.profile.v2Representations.curvature,
         );
-        api.validateProfile(JSON.stringify(message.profile));
+        const result = certifyCurvatureCandidate(
+          message.compiledTrack,
+          message.profile.vehicleSettings,
+          representation,
+        );
+        if (!result.certificate.pass) throw new Error("imported curvature profile is infeasible");
+        message.profile.v2Representations.curvature = curvatureRepresentationToJson(
+          result.representation,
+        );
+        message.profile.v2Representations.optimality.closure = {
+          ...result.representation.closureResiduals,
+        };
         self.postMessage({
-          ...envelope(message), type: "profileValidated", profile: message.profile,
+          ...envelope(message),
+          type: "profileValidated",
+          profile: {
+            ...message.profile,
+            lineLengthM: result.lineLengthM,
+            lapTimeS: result.lapTime,
+            profileNodes: unpackProfile(result.profileNodes, result.edgeCount),
+            certificate: {
+              ...result.certificate,
+              hash: message.trackFingerprint,
+            },
+          },
         } satisfies CertifierEvent);
       }
     } catch (error) {
@@ -107,7 +138,7 @@ self.addEventListener("message", (event: MessageEvent<CertifierCommand>) => {
         runVersion: message.runVersion,
         detail: {},
       };
-      if (message.type === "certifyCandidate" || message.type === "certifyCurvature") {
+      if (message.type === "certifyCenterline" || message.type === "certifyCurvature") {
         self.postMessage({
           ...envelope(message), type: "certificationFailed",
           candidateId: message.candidateId, error: failure,

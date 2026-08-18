@@ -1,4 +1,4 @@
-export type CandidateSource = "baseline" | "discovery" | "curvature";
+export type CandidateSource = "baseline" | "curvature";
 
 export interface PendingCandidate {
   source: CandidateSource;
@@ -8,9 +8,7 @@ export interface PendingCandidate {
 }
 
 /**
- * Keep one pending candidate per comparable score domain. Discovery and
- * curvature lap times come from different evaluators, so one must never
- * evict the other before both receive the same binary64 certification.
+ * Keep the fastest pending candidate for each canonical queue key.
  */
 export function upsertPendingCandidate<T extends PendingCandidate>(
   queue: readonly T[],

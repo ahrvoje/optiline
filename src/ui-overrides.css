@@ -213,12 +213,24 @@
 }
 
 .setting {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(125px, .45fr) minmax(190px, .95fr) minmax(48px, .75fr);
   gap: 8px;
-  padding: 10px 9px 10px 10px;
+  padding: 10px 9px 10px 16px;
   border-bottom: 1px solid #242a30;
-  border-left: 6px solid var(--constraint-color, #303740);
+}
+
+.setting::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 8px;
+  background: var(--constraint-color, #303740);
+}
+
+.setting.constraint-domain-start::before {
+  top: 4px;
 }
 
 .setting-editor label {

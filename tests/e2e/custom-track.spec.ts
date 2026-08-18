@@ -25,6 +25,12 @@ test("creates, persists, renames, edits, and deletes a custom oval", async ({ pa
   await expect(page.locator("#track-editor")).toBeVisible();
 
   await expect(page.locator("#engine-status")).toContainText("Certified", { timeout: 30_000 });
+  await page.locator("#optimize-button").click();
+  await expect(page.locator("#candidate-rate")).not.toHaveText("—", { timeout: 30_000 });
+  await page.locator("#optimize-button").click();
+  await expect(page.locator("#engine-status")).toContainText("Stopped", { timeout: 60_000 });
+  await expect(page.locator("#work-overlay")).toBeHidden({ timeout: 90_000 });
+  await expect(page.locator("#save-button")).toBeEnabled();
   await page.locator("#save-button").click();
   await expect(page.locator("#saved-count")).toHaveText("1");
   await page.locator("#track-editor-done").click();

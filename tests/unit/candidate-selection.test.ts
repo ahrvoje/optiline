@@ -11,29 +11,29 @@ interface TestCandidate extends PendingCandidate {
   hasV2Metadata: boolean;
 }
 
-describe("cross-representation candidate selection", () => {
-  it("does not let a curvature candidate evict a faster discovery candidate", () => {
-    const discovery: TestCandidate = {
-      id: "discovery-fast",
-      source: "discovery",
-      queueKey: "discovery-final-0",
+describe("canonical candidate selection", () => {
+  it("does not let one canonical finalist evict another", () => {
+    const first: TestCandidate = {
+      id: "curvature-fast",
+      source: "curvature",
+      queueKey: "curvature-final-0",
       provisionalLapTime: 31,
-      hasV2Metadata: false,
+      hasV2Metadata: true,
     };
     const curvature: TestCandidate = {
       id: "curvature-slower",
       source: "curvature",
-      queueKey: "curvature-final",
+      queueKey: "curvature-final-1",
       provisionalLapTime: 32,
       hasV2Metadata: true,
     };
 
     const queue = upsertPendingCandidate(
-      upsertPendingCandidate<TestCandidate>([], discovery),
+      upsertPendingCandidate<TestCandidate>([], first),
       curvature,
     );
     expect(queue.map(candidate => candidate.id)).toEqual([
-      "discovery-fast",
+      "curvature-fast",
       "curvature-slower",
     ]);
   });
@@ -41,10 +41,10 @@ describe("cross-representation candidate selection", () => {
   it("retains only the fastest pending candidate within one score domain", () => {
     const first: TestCandidate = {
       id: "first",
-      source: "discovery",
-      queueKey: "discovery-live",
+      source: "curvature",
+      queueKey: "curvature-live",
       provisionalLapTime: 32,
-      hasV2Metadata: false,
+      hasV2Metadata: true,
     };
     const faster = { ...first, id: "faster", provisionalLapTime: 31 };
     const slower = { ...first, id: "slower", provisionalLapTime: 33 };
@@ -54,13 +54,13 @@ describe("cross-representation candidate selection", () => {
     expect(queue).toEqual([faster]);
   });
 
-  it("retains separate discovery finalists for authoritative certification", () => {
+  it("retains separate canonical finalists for authoritative certification", () => {
     const finalists: TestCandidate[] = [31, 31.1, 31.2].map((lapTime, index) => ({
       id: `final-${index}`,
-      source: "discovery",
-      queueKey: `discovery-final-${index}`,
+      source: "curvature",
+      queueKey: `curvature-final-${index}`,
       provisionalLapTime: lapTime,
-      hasV2Metadata: false,
+      hasV2Metadata: true,
     }));
     const queue = finalists.reduce<TestCandidate[]>(
       (pending, candidate) => upsertPendingCandidate(pending, candidate),

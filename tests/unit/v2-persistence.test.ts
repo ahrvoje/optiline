@@ -6,7 +6,7 @@ import { validateProfileShape } from "@/persistence/import-export";
 function profileWithV2() {
   const residuals = { turn: 0, x: 0, y: 0, maxAbs: 0 };
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     profileId: "12345678-1234-4123-8123-123456789abc",
     name: "V2 profile",
     createdAt: "2026-08-17T00:00:00.000Z",
@@ -15,8 +15,6 @@ function profileWithV2() {
     vehicleSettings: { ...DEFAULT_VEHICLE },
     dynamicSettings: { seedLo: 1, seedHi: 2, deterministic: true, candidateVisibility: 8 },
     optimizerSeed: [1, 2],
-    genotypeD: Array(64).fill(0),
-    preimageControls: Array.from({ length: 128 }, () => [0, 0]),
     lineLengthM: 100,
     lapTimeS: 10,
     profileNodes: [{
@@ -106,5 +104,12 @@ describe("V2 persisted output", () => {
     const profile = profileWithV2();
     profile.v2Representations.curvature.closureModes[0] = { kind: "cos", harmonic: 2 };
     expect(() => validateProfileShape(profile)).toThrow(/closureModes\[0\]/);
+  });
+
+  it("rejects PH-only legacy profiles", () => {
+    const profile = profileWithV2() as Record<string, unknown>;
+    profile["schemaVersion"] = 1;
+    delete profile["v2Representations"];
+    expect(() => validateProfileShape(profile)).toThrow(/schemaVersion/);
   });
 });

@@ -36,13 +36,11 @@ export interface PhLineSpec {
 /**
  * Display cache for an authoritative intrinsic-curvature trajectory.
  * Samples are uniform in arc length and packed as x,y,tx,ty,kappa. The
- * preimage and gates are a legacy PH shadow only; no trajectory operation
- * reads them when kind is "curvature".
+ * This object contains no alternate geometric representation. The certified
+ * intrinsic-curvature samples are the sole trajectory geometry.
  */
 export interface CurvatureLineSpec {
   kind: "curvature";
-  preimage: Float64Array;
-  gates: Float64Array;
   pathLengthM: number;
   samples: Float64Array;
 }

@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { BUILT_IN_TRACKS } from "@/model/catalog";
 import { DEFAULT_VEHICLE } from "@/model/contracts";
 import {
+  curvatureRepresentationFromJson,
+  curvatureRepresentationToJson,
   fitCurvatureRepresentation,
   measureCurvatureClosure,
   projectCurvatureClosure,
@@ -146,6 +148,27 @@ function circleRepresentation(): CurvatureRepresentation {
 }
 
 describe("V2 curvature closure projector", () => {
+  it("round-trips the complete certified curvature representation", () => {
+    const projected = projectCurvatureClosure(circleRepresentation(), {
+      tolerance: 1e-11,
+      sampleCount: 1024,
+    })!;
+    projected.rotationRad = 0.25;
+    projected.translation = [12, -8];
+    projected.seamPhase = 0.125;
+    const restored = curvatureRepresentationFromJson(
+      curvatureRepresentationToJson(projected),
+    );
+    expect(restored.pathLengthM).toBe(projected.pathLengthM);
+    expect(restored.rotationRad).toBe(projected.rotationRad);
+    expect(restored.translation).toEqual(projected.translation);
+    expect(restored.seamPhase).toBe(projected.seamPhase);
+    expect(Array.from(restored.coefficients)).toEqual(Array.from(projected.coefficients));
+    expect(Array.from(restored.correctionCoefficients))
+      .toEqual(Array.from(projected.correctionCoefficients));
+    expect(restored.closureResiduals).toEqual(projected.closureResiduals);
+  });
+
   it("certifies and reconstructs a constant-curvature circle", () => {
     const projected = projectCurvatureClosure(circleRepresentation(), {
       tolerance: 1e-11,

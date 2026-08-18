@@ -23,6 +23,7 @@ import {
   STORE_TRACKS,
 } from "@/model/contracts";
 import type { CompiledTrackJson, SavedProfileJson } from "@/model/contracts";
+import { validateProfileShape } from "@/persistence/import-export";
 
 export interface ImportedTrackRecord {
   fingerprint: string;
@@ -80,7 +81,18 @@ function transactionDone(tx: IDBTransaction): Promise<void> {
 export async function getAllProfiles(): Promise<SavedProfileJson[]> {
   const db = await openDb();
   const tx = db.transaction(STORE_PROFILES, "readonly");
-  return requestToPromise(tx.objectStore(STORE_PROFILES).getAll() as IDBRequest<SavedProfileJson[]>);
+  const stored = await requestToPromise(
+    tx.objectStore(STORE_PROFILES).getAll() as IDBRequest<unknown[]>,
+  );
+  const profiles: SavedProfileJson[] = [];
+  for (const value of stored) {
+    try {
+      profiles.push(validateProfileShape(value));
+    } catch {
+      // PH-only legacy records and malformed curvature records are ignored.
+    }
+  }
+  return profiles;
 }
 
 export async function getProfilesForTrack(trackFingerprint: string): Promise<SavedProfileJson[]> {

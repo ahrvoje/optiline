@@ -22,4 +22,5 @@ describe("minimum-curvature initializer", () => {
     expect(candidate.lapTime).toBeLessThan(center.lapTime - 0.25);
     expect(candidate.regularizer).toBeLessThan(center.regularizer * 4);
   });
+
 });

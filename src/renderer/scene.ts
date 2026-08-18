@@ -15,7 +15,7 @@
  */
 import type { CompiledTrackJson } from "@/model/contracts";
 import type { CameraState } from "@/renderer/camera";
-import type { LineSpec } from "@/renderer/ph-tessellate";
+import type { CurvatureLineSpec } from "@/renderer/ph-tessellate";
 
 export interface SceneVehicle {
   x: number;
@@ -47,11 +47,11 @@ export interface RenderScene {
   /** Interleaved x,y candidate polylines with float start offsets. */
   candidateLines: Float32Array | null;
   candidateOffsets: Uint32Array | null;
-  provisionalBest: LineSpec | null;
+  provisionalBest: CurvatureLineSpec | null;
   /** Provisional line flashes invalid (#ef5350) on failed certification. */
   invalidFlash: boolean;
-  certifiedBest: LineSpec | null;
-  savedLines: { color: string; spec: LineSpec }[];
+  certifiedBest: CurvatureLineSpec | null;
+  savedLines: { color: string; spec: CurvatureLineSpec }[];
   vehicles: SceneVehicle[];
   labels: SceneLabel[];
   /** Low-contrast work state painted behind the track geometry. */

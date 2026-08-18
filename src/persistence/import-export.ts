@@ -4,9 +4,8 @@
  *
  * Import policy: this module performs only the input-safety gate (size
  * limit, nesting depth, JSON well-formedness, structural shape). All
- * mathematical claims in an imported file are ignored until the
- * certifier worker revalidates them (§20.3); after a successful
- * revalidation the caller stores the canonical reserialized version.
+ * mathematical claims in an imported file are ignored until the canonical
+ * curvature representation is revalidated; PH-only profiles are invalid.
  *
  * Error text identifies the offending field and rule and never renders
  * raw untrusted content (§26).
@@ -185,13 +184,12 @@ export function validateTrackSourceShape(value: unknown): TrackSourceJson {
 
 /**
  * Structural check of a saved profile file (§20.3). Every stored claim
- * (lap time, certificates, nodes) remains untrusted; the certifier
- * worker recomputes all of it from the genotype before the profile is
- * accepted.
+ * (lap time, certificates, nodes) remains untrusted; the certifier worker
+ * recomputes all of it from the canonical curvature representation.
  */
 export function validateProfileShape(value: unknown): SavedProfileJson {
   const obj = requireObject(value, "profile");
-  if (obj["schemaVersion"] !== 1) throw new ImportError("schemaVersion", "must be 1");
+  if (obj["schemaVersion"] !== 2) throw new ImportError("schemaVersion", "must be 2");
   const profileId = requireString(obj, "profileId", 64);
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(profileId)) {
     throw new ImportError("profileId", "must be a UUID v4");
@@ -218,33 +216,6 @@ export function validateProfileShape(value: unknown): SavedProfileJson {
   ) {
     throw new ImportError("optimizerSeed", "must be two u32 values");
   }
-  const genotypeRaw = requireBoundedArray(obj, "genotypeD", GATE_COUNT);
-  if (genotypeRaw.length !== GATE_COUNT) {
-    throw new ImportError("genotypeD", `must contain exactly ${GATE_COUNT} values`);
-  }
-  const genotypeD = genotypeRaw.map((v, i) => {
-    if (typeof v !== "number" || !Number.isFinite(v)) {
-      throw new ImportError(`genotypeD[${i}]`, "must be a finite number");
-    }
-    return v;
-  });
-  const preRaw = requireBoundedArray(obj, "preimageControls", 128);
-  if (preRaw.length !== 128) {
-    throw new ImportError("preimageControls", "must contain exactly 128 complex pairs");
-  }
-  const preimageControls: [number, number][] = preRaw.map((p, i) => {
-    if (
-      !Array.isArray(p) ||
-      p.length !== 2 ||
-      typeof p[0] !== "number" ||
-      typeof p[1] !== "number" ||
-      !Number.isFinite(p[0]) ||
-      !Number.isFinite(p[1])
-    ) {
-      throw new ImportError(`preimageControls[${i}]`, "must be a pair of finite numbers");
-    }
-    return [p[0], p[1]];
-  });
   const lineLengthM = requireFiniteNumber(obj, "lineLengthM");
   const lapTimeS = requireFiniteNumber(obj, "lapTimeS");
   const nodesRaw = requireBoundedArray(obj, "profileNodes", 8192 + 1);
@@ -270,14 +241,15 @@ export function validateProfileShape(value: unknown): SavedProfileJson {
     return out as unknown as SavedProfileJson["profileNodes"][number];
   });
   const certificate = requireObject(obj["certificate"], "certificate");
-  const v2Representations = obj["v2Representations"] === undefined
-    ? undefined
-    : validateV2Representations(obj["v2Representations"]);
+  if (obj["v2Representations"] === undefined) {
+    throw new ImportError("v2Representations", "canonical curvature representation is required");
+  }
+  const v2Representations = validateV2Representations(obj["v2Representations"]);
   // The imported profile object is passed to the certifier worker; the
   // worker recomputes and replaces every certificate field, so only the
   // structural presence is checked here.
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     profileId,
     name,
     createdAt,
@@ -291,13 +263,11 @@ export function validateProfileShape(value: unknown): SavedProfileJson {
       candidateVisibility: numberOr(dyn["candidateVisibility"], 0),
     },
     optimizerSeed: [seedArr[0], seedArr[1]],
-    genotypeD,
-    preimageControls,
     lineLengthM,
     lapTimeS,
     profileNodes,
     certificate: certificate as unknown as SavedProfileJson["certificate"],
-    ...(v2Representations === undefined ? {} : { v2Representations }),
+    v2Representations,
   };
 }
 

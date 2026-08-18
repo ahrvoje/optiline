@@ -235,7 +235,7 @@ export interface CertificateReportJson {
 
 /** Saved profile (§20.3), extension .opprofile.json. */
 export interface SavedProfileJson {
-  schemaVersion: 1;
+  schemaVersion: 2;
   profileId: string; // UUID v4
   name: string;
   createdAt: string; // ISO-8601 UTC
@@ -244,14 +244,12 @@ export interface SavedProfileJson {
   vehicleSettings: VehicleSettings;
   dynamicSettings: OptimizerSettings;
   optimizerSeed: [number, number];
-  genotypeD: number[]; // 64 binary64
-  preimageControls: [number, number][]; // 128 complex binary64 pairs
   lineLengthM: number;
   lapTimeS: number;
   profileNodes: ProfileNodeJson[];
   certificate: CertificateReportJson & { hash: string };
-  /** V2 discovery, canonical curvature, and optimality output. */
-  v2Representations?: V2RepresentationsJson;
+  /** Discovery metadata, canonical curvature, and optimality output. */
+  v2Representations: V2RepresentationsJson;
 }
 
 export interface ProfileNodeJson {
@@ -375,6 +373,14 @@ export type OptimizerEvent = MessageEnvelope &
         rejectionCounts: number[]; // 13 entries, §14.5 order
         provisionalLapTime: number | null;
         batchLatencyMs: { median: number; p95: number; worst: number };
+        phaseLatencyMs: {
+          generate: number;
+          gpuProxy: number;
+          cpuTruth: number;
+          patternSearch: number;
+          canonicalization: number;
+          bookkeeping: number;
+        };
         /** Active multi-fidelity level of the hierarchical optimizer. */
         stage: "fourier" | "spline" | "curvature" | "smoothing";
         /** Rates are intentionally separate; a proxy is not a certified lap. */
@@ -393,19 +399,27 @@ export type OptimizerEvent = MessageEnvelope &
         lineOffsets: Uint32Array;
       }
     | {
+        type: "intermediateBest";
+        /** One-based completed 30-second interval of discovery. */
+        sequence: number;
+        elapsedMs: number;
+        /** Resampled preview lap and source binary64 optimizer lap. */
+        lapTime: number;
+        optimizerLapTime: number;
+        lineLengthM: number;
+        pathSamples: Float64Array;
+        profileNodes: ProfileNodeJson[];
+      }
+    | {
         type: "provisionalBest";
-        /** Score domain. Only candidates in the same domain are comparable
-         * before binary64 certification. */
-        candidateSpace: "discovery" | "curvature";
-        /** Queue identity. Comparable live updates share a key; retained final
-         * elites use distinct keys so each receives authoritative certification. */
+        /** Every publishable optimizer result is canonical curvature. */
+        candidateSpace: "curvature";
+        /** Comparable live updates share a replacement key. */
         candidateKey: string;
         lapTime: number;
         genotype: Float64Array;
-        preimage: Float64Array; // 256 = 128 complex pairs
         candidateId: number;
-        /** Present after the mandatory V2 curvature-space stage. */
-        representations?: V2RepresentationsJson;
+        representations: V2RepresentationsJson;
       }
     | {
         type: "warning";
@@ -424,11 +438,9 @@ export type CertifierCommand = MessageEnvelope &
     | { type: "compileTrack"; source: TrackSourceJson }
     | { type: "validateImportedTrack"; asset: CompiledTrackJson }
     | {
-        type: "certifyCandidate";
+        type: "certifyCenterline";
         compiledTrack: CompiledTrackJson;
         vehicle: VehicleSettings;
-        genotype: Float64Array;
-        warmPreimage?: Float64Array;
         provisionalLapTime: number;
         candidateId: number;
       }
@@ -437,7 +449,6 @@ export type CertifierCommand = MessageEnvelope &
         compiledTrack: CompiledTrackJson;
         vehicle: VehicleSettings;
         genotype: Float64Array;
-        preimage: Float64Array;
         representations: V2RepresentationsJson;
         provisionalLapTime: number;
         candidateId: number;
@@ -456,11 +467,9 @@ export type CertifierEvent = MessageEnvelope &
     | { type: "ready"; wasmVersion: string }
     | { type: "trackCompiled"; asset: CompiledTrackJson }
     | {
-        type: "certified";
+        type: "centerlineCertified";
         candidateId: number;
         lapTime: number;
-        genotype: Float64Array;
-        preimage: Float64Array;
         profileNodes: Float64Array; // packed 7 doubles per node (§20.3 order)
         edgeCount: number;
         certificate: CertificateReportJson;
@@ -469,7 +478,6 @@ export type CertifierEvent = MessageEnvelope &
         type: "curvatureCertified";
         candidateId: number;
         genotype: Float64Array;
-        preimage: Float64Array;
         lapTime: number;
         lineLengthM: number;
         profileNodes: Float64Array;

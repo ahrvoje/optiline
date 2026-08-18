@@ -16,9 +16,16 @@ import {
   type IslandEvolutionSnapshot,
   type IslandObservation,
 } from "@/optimizer/island-es";
-import { evaluateMinimumLapCandidate } from "@/optimizer/minimum-lap";
+import {
+  evaluateMinimumLapCandidate,
+  type CandidateEvaluation,
+} from "@/optimizer/minimum-lap";
 import { selectFullEvaluationIndices } from "@/optimizer/surrogate-screening";
 import { selectDiverseTimeArchive } from "@/optimizer/elite-archive";
+import {
+  buildIntermediatePreview,
+  completedReportingInterval,
+} from "@/optimizer/intermediate-reporting";
 import {
   buildHybridBasisTable,
   buildHybridPeriodicBasis,
@@ -40,14 +47,16 @@ import {
   type CurvatureRepresentation,
 } from "@/optimizer/curvature-closure";
 import { evaluateCurvatureCandidate } from "@/optimizer/curvature-evaluation";
-import { smoothPatternProposals } from "@/optimizer/smooth-arc-search";
+import {
+  quadraticPatternCombinations,
+  smoothPatternProposals,
+} from "@/optimizer/smooth-arc-search";
 import { minimumCurvatureSeed } from "@/optimizer/geometric-seed";
 import {
   buildReferenceSpine,
   buildReferenceGeometryTable,
   buildSafeCorridor,
   lateralFieldGenotype,
-  lateralFieldPreimage,
   racingLinePolyline,
   remapFourierCorridor,
   sampleRacingLine,
@@ -60,13 +69,13 @@ import {
 import shaderSource from "./optimizer.wgsl?raw";
 
 const GPU_ISLAND_COUNT = 8;
-const GPU_POPULATION_PER_ISLAND = 256;
+const GPU_POPULATION_PER_ISLAND = 1024;
 const CPU_ISLAND_COUNT = 4;
 const CPU_POPULATION_PER_ISLAND = 8;
 const GENERATIONS_PER_LEVEL = 4;
-const FULL_RECHECKS_PER_ISLAND = 4;
+const FULL_RECHECKS_PER_ISLAND = 2;
 const DISCOVERY_ELITE_COUNT = 12;
-const CURVATURE_SOURCE_COUNT = 6;
+const CURVATURE_SOURCE_COUNT = 1;
 const PATTERN_FULL_RECHECKS = 4;
 
 function mutationSigmas(
@@ -93,9 +102,9 @@ function mutationSigmas(
 
 function truthStationCount(basis: HybridPeriodicBasis): number {
   return Math.max(
-    512,
+    256,
     4 * basis.residualControlCount,
-    16 * basis.fourierModes,
+    8 * basis.fourierModes,
   );
 }
 
@@ -189,7 +198,13 @@ async function requestGpu(): Promise<GpuContext | null> {
     layout,
     compute: { module, entryPoint: "reduceMain" },
   });
-  return { adapter, device, bindGroupLayout, geometryPipeline, reductionPipeline };
+  return {
+    adapter,
+    device,
+    bindGroupLayout,
+    geometryPipeline,
+    reductionPipeline,
+  };
 }
 
 function adapterLabel(adapter: GPUAdapter): string {
@@ -694,7 +709,7 @@ function refineCurvaturePolish(
     const spectralCount = 2 * fourierCoefficientCount(representation.basis.fourierModes);
     const proposals = allProposals.slice(0, Math.min(34, spectralCount));
     const local = allProposals.slice(spectralCount);
-    const localCount = Math.min(64, local.length);
+    const localCount = Math.min(16, local.length);
     for (let i = 0; i < localCount; i++) {
       proposals.push(local[Math.floor(i * local.length / localCount)]!);
     }
@@ -715,7 +730,7 @@ function refineCurvaturePolish(
       if (evaluated.feasible) ranked.push({ representation: projected, score: evaluated });
     }
     ranked.sort((a, b) => compareFeasibleFirst(a.score, b.score, 0));
-    for (const candidate of ranked.slice(0, 8)) {
+    for (const candidate of ranked.slice(0, 2)) {
       const evaluated = evaluateCurvatureCandidate(
         track, vehicle, candidate.representation, 512,
       );
@@ -1003,6 +1018,7 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
     ? seeds[0]!.slice()
     : Float64Array.from(restored.best);
   let globalScore: FeasibleFirstScore;
+  let globalEvaluation: CandidateEvaluation | null;
   try {
     const initial = evaluateMinimumLapCandidate(
       track, vehicle, basisModel, globalCoefficients,
@@ -1010,6 +1026,7 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
       corridor,
     );
     globalScore = initial;
+    globalEvaluation = initial;
   } catch {
     globalScore = {
       feasible: false,
@@ -1018,6 +1035,7 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
       regularizer: Infinity,
       minClearanceM: -Infinity,
     };
+    globalEvaluation = null;
   }
   const discoveryElites: DiscoveryElite[] = [];
   retainDiscoveryElite(
@@ -1029,10 +1047,16 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
   let proxyCandidates = 0;
   let fullCandidates = 1;
   let stationEvaluations = 0;
-  let lastPublishedDiscoveryLap = Infinity;
+  let lastReportedInterval = 0;
 
   while (!stopping) {
     const batchStarted = performance.now();
+    let phaseStarted = batchStarted;
+    let generateMs = 0;
+    let gpuProxyMs = 0;
+    let cpuTruthMs = 0;
+    let patternSearchMs = 0;
+    let canonicalizationMs = 0;
     const spectralComplete = basisModel.fourierModes >= modeRange.maximum;
     const corridorComplete = corridor.betaSafeRad === 0;
     const residualComplete = basisModel.residualControlCount >= targetResidualCount ||
@@ -1048,17 +1072,22 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
     search.options.acceptanceTarget = atFinestLevel ? 0.8 : 0.95;
     search.options.explorationFraction = atFinestLevel ? 0.03125 : 0.0625;
     const generated = search.generate();
+    generateMs = performance.now() - phaseStarted;
+    phaseStarted = performance.now();
     const packed = gpu
       ? await scoreGpu(gpu, generated)
       : scoreCpu(track, vehicle, basisModel, generated, stationCount, corridor);
+    gpuProxyMs = performance.now() - phaseStarted;
+    phaseStarted = performance.now();
     const observations = proxyObservations(generated, packed);
-    const fullObservations: IslandObservation[] = [];
     proxyCandidates += generated.length;
     candidateCountTotal += generated.length;
     stationEvaluations += generated.length * stationCount;
 
     for (const index of selectFullEvaluationIndices(
-      observations, generation, FULL_RECHECKS_PER_ISLAND,
+      observations,
+      generation,
+      atFinestLevel ? 1 : FULL_RECHECKS_PER_ISLAND,
     )) {
       const observation = observations[index]!;
       try {
@@ -1088,12 +1117,6 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
             );
           }
         }
-        observation.candidate = {
-          ...observation.candidate,
-          coefficients: candidateCoefficients,
-        };
-        observation.score = evaluated;
-        fullObservations.push(observation);
         fullCandidates++;
         retainDiscoveryElite(
           discoveryElites,
@@ -1105,30 +1128,37 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
         );
         if (compareFeasibleFirst(evaluated, globalScore, 0) < 0) {
           globalScore = evaluated;
+          globalEvaluation = evaluated;
           globalCoefficients = candidateCoefficients.slice();
         }
       } catch {
         // Full FP64 reranking rejects singular or nonfinite proxy survivors.
       }
     }
-    // The GPU utility is a screening surrogate. Only truth-evaluated scores
-    // update the ES; proxy and truth numeric domains are never mixed.
-    search.update(fullObservations, 1e-5);
+    cpuTruthMs = performance.now() - phaseStarted;
+    phaseStarted = performance.now();
+    // The full GPU population controls the stochastic search. Binary64 scores
+    // remain authoritative for the global incumbent and retained archive; the
+    // two numeric domains are never compared with each other.
+    search.update(observations, 1e-5);
 
+    const patternInterval = atFinestLevel ? 2 : 8;
     if (basisModel.residualControlCount > 0 && generation > 0 &&
-        generation % 8 === 0 && globalScore.feasible) {
+        generation % patternInterval === 0 && globalScore.feasible) {
       const physicalScale = track.lapLengthM /
         Math.max(1, basisModel.residualControlCount || 1);
       const spectralStep = Math.max(
         0.012,
         Math.min(0.08, 0.03 * (physicalScale / 10) ** 2),
       );
-      const trials = smoothPatternProposals(
+      const patternCoefficients = smoothPatternProposals(
         new Float64Array(globalCoefficients),
         basisModel,
         track.lapLengthM,
         spectralStep,
-      ).map((coefficients, index): IslandCandidate => ({
+      );
+      const trials = [new Float64Array(globalCoefficients), ...patternCoefficients]
+        .map((coefficients, index): IslandCandidate => ({
         island: 0,
         candidateInIsland: index,
         coefficients,
@@ -1141,37 +1171,52 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
       proxyCandidates += trials.length;
       candidateCountTotal += trials.length;
       stationEvaluations += trials.length * stationCount;
+      const baseProxy = trialObservations[0]!.score;
       const rankedTrials = trialObservations
         .map((observation, index) => ({ observation, index }))
-        .filter(item => item.observation.score.feasible)
+        .filter(item => item.index > 0 && item.observation.score.feasible &&
+          compareFeasibleFirst(item.observation.score, baseProxy, 0) < 0)
         .sort((a, b) => compareFeasibleFirst(a.observation.score, b.observation.score));
+      const combinedCoefficients = quadraticPatternCombinations(
+        new Float64Array(globalCoefficients),
+        patternCoefficients,
+        baseProxy,
+        trialObservations.slice(1).map(observation => observation.score),
+        fourierCoefficientCount(basisModel.fourierModes),
+      );
+      const fullTrialCoefficients = [
+        ...rankedTrials.slice(0, PATTERN_FULL_RECHECKS)
+          .map(trial => trial.observation.candidate.coefficients),
+        ...combinedCoefficients,
+      ];
       let patternImproved = false;
-      for (const trial of rankedTrials.slice(0, PATTERN_FULL_RECHECKS)) {
+      for (const coefficients of fullTrialCoefficients) {
         try {
           const evaluated = evaluateMinimumLapCandidate(
             track,
             vehicle,
             basisModel,
-            trial.observation.candidate.coefficients,
+            coefficients,
             truthStationCount(basisModel),
             "full", corridor,
           );
           fullCandidates++;
           retainDiscoveryElite(
             discoveryElites,
-            trial.observation.candidate.coefficients,
+            coefficients,
             evaluated,
             lateralFieldGenotype(
               track,
               vehicle,
               basisModel,
-              trial.observation.candidate.coefficients,
+              coefficients,
               corridor,
             ),
           );
           if (compareFeasibleFirst(evaluated, globalScore, 0) < 0) {
             globalScore = evaluated;
-            globalCoefficients = trial.observation.candidate.coefficients.slice();
+            globalEvaluation = evaluated;
+            globalCoefficients = coefficients.slice();
             patternImproved = true;
           }
         } catch {
@@ -1186,25 +1231,29 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
         );
       }
     }
+    patternSearchMs = performance.now() - phaseStarted;
+    phaseStarted = performance.now();
 
     generation++;
-    if (generation % 8 === 0 && globalScore.feasible &&
-        globalScore.lapTime < lastPublishedDiscoveryLap - 0.02) {
-      lastPublishedDiscoveryLap = globalScore.lapTime;
+    const elapsedMs = performance.now() - started;
+    const reportingInterval = completedReportingInterval(elapsedMs);
+    if (reportingInterval > lastReportedInterval && globalEvaluation?.feasible &&
+        globalEvaluation.speedSquared !== null) {
+      const preview = buildIntermediatePreview(globalEvaluation, vehicle);
       send({
-        type: "provisionalBest",
-        candidateSpace: "discovery",
-        candidateKey: "discovery-live",
-        lapTime: globalScore.lapTime,
-        genotype: lateralFieldGenotype(
-          track, vehicle, basisModel, globalCoefficients, corridor,
-        ),
-        preimage: lateralFieldPreimage(
-          track, vehicle, basisModel, globalCoefficients, corridor,
-        ),
-        candidateId: candidateCountTotal + generation,
+        type: "intermediateBest",
+        sequence: reportingInterval,
+        elapsedMs,
+        optimizerLapTime: preview.optimizerLapTime,
+        lapTime: preview.lapTime,
+        lineLengthM: preview.lineLengthM,
+        pathSamples: preview.pathSamples,
+        profileNodes: preview.profileNodes,
       });
+      lastReportedInterval = reportingInterval;
     }
+    canonicalizationMs = performance.now() - phaseStarted;
+    phaseStarted = performance.now();
     if (generation % 2 === 0) {
       publishIslandLines(track, vehicle, basisModel, search, corridor);
     }
@@ -1223,6 +1272,16 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
       ],
       provisionalLapTime: globalScore.feasible ? globalScore.lapTime : null,
       batchLatencyMs: { median: latency, p95: latency, worst: latency },
+      phaseLatencyMs: {
+        generate: generateMs,
+        gpuProxy: gpuProxyMs,
+        cpuTruth: cpuTruthMs,
+        patternSearch: patternSearchMs,
+        canonicalization: canonicalizationMs,
+        bookkeeping: Math.max(0, latency - (
+          generateMs + gpuProxyMs + cpuTruthMs + patternSearchMs + canonicalizationMs
+        )),
+      },
       stage: spectralComplete ? "spline" : "fourier",
       throughput: {
         stationPerSecond: stationEvaluations / elapsedSeconds,
@@ -1298,11 +1357,12 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
         4 * basisModel.residualControlCount,
       );
       try {
-        globalScore = evaluateMinimumLapCandidate(
+        globalEvaluation = evaluateMinimumLapCandidate(
           track, vehicle, basisModel, globalCoefficients,
           truthStationCount(basisModel),
           "full", corridor,
         );
+        globalScore = globalEvaluation;
         fullCandidates++;
         retainDiscoveryElite(
           discoveryElites,
@@ -1318,6 +1378,7 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
           regularizer: Infinity,
           minClearanceM: -Infinity,
         };
+        globalEvaluation = null;
       }
       if (gpu !== null && gpuContext !== null) {
         destroyGpuResolution(gpu);
@@ -1346,30 +1407,10 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
       globalScore,
       lateralFieldGenotype(track, vehicle, basisModel, globalCoefficients, corridor),
     );
-    // PH reconstruction can reverse the order of close discovery scores.
-    // Publish every retained full-evaluation elite under a distinct key so
-    // the main thread certifies each one before selecting the displayed line.
-    for (let index = 0; index < discoveryElites.length; index++) {
-      const elite = discoveryElites[index]!;
-      send({
-        type: "provisionalBest",
-        candidateSpace: "discovery",
-        candidateKey: `discovery-final-${index}`,
-        lapTime: elite.score.lapTime,
-        genotype: lateralFieldGenotype(
-          track, vehicle, basisModel, elite.coefficients, corridor,
-        ),
-        preimage: lateralFieldPreimage(
-          track, vehicle, basisModel, elite.coefficients, corridor,
-        ),
-        candidateId: candidateCountTotal + index,
-      });
-    }
     const curvatureStarted = performance.now();
     let curvature: CurvaturePolishResult | null = null;
     let curvatureSource: Float64Array | null = null;
     const conversionErrors: string[] = [];
-    let feasibleConversions = 0;
     const conversionSources = [
       globalCoefficients,
       ...discoveryElites.slice(0, CURVATURE_SOURCE_COUNT).map(elite => elite.coefficients),
@@ -1391,12 +1432,10 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
           conversionErrors.push("projected curvature path is infeasible");
           continue;
         }
-        feasibleConversions++;
         if (curvature === null || compareFeasibleFirst(converted.score, curvature.score, 0) < 0) {
           curvature = converted;
           curvatureSource = source;
         }
-        if (feasibleConversions >= 1) break;
       } catch (error) {
         conversionErrors.push(error instanceof Error ? error.message : String(error));
       }
@@ -1422,6 +1461,14 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
         p95: curvatureSeconds * 1000,
         worst: curvatureSeconds * 1000,
       },
+      phaseLatencyMs: {
+        generate: 0,
+        gpuProxy: 0,
+        cpuTruth: 0,
+        patternSearch: 0,
+        canonicalization: curvatureSeconds * 1000,
+        bookkeeping: 0,
+      },
       stage: "curvature",
       throughput: {
         stationPerSecond: stationEvaluations / elapsedSeconds,
@@ -1432,20 +1479,16 @@ async function run(start: Extract<OptimizerCommand, { type: "start" }>): Promise
       },
     });
     if (curvature !== null && curvatureSource !== null) {
-      const representations = v2Representations(
-        track, vehicle, corridor, basisModel, curvatureSource, curvature,
-      );
       send({
         type: "provisionalBest",
         candidateSpace: "curvature",
-        candidateKey: "curvature-final",
+        candidateKey: "curvature-refined",
         lapTime: curvature.score.lapTime,
         genotype: curvatureGenotype(track, curvature.representation),
-        preimage: lateralFieldPreimage(
-          track, vehicle, basisModel, curvatureSource, corridor,
-        ),
         candidateId: candidateCountTotal + curvatureCandidates,
-        representations,
+        representations: v2Representations(
+          track, vehicle, corridor, basisModel, curvatureSource, curvature,
+        ),
       });
     } else {
       const reason = conversionErrors.find(message => message.trim().length > 0) ??
